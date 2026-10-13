@@ -1,0 +1,7 @@
+build/
+/blockcraft.nds
+/blockcraft_test.nds
+*.elf
+*.map
+__pycache__/
+.DS_Store

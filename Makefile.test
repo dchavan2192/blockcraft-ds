@@ -1,0 +1,8 @@
+BLOCKSDS	?= /opt/blocksds/core
+NAME		:= blockcraft_test
+GAME_TITLE	:= BlockCraft DS Test
+SOURCEDIRS	:= source
+BINDIRS		:= data
+CFLAGS		:= -Wno-unused-function
+DEFINES		:= -DTESTMODE
+include $(BLOCKSDS)/sys/default_makefiles/rom_arm9/Makefile
