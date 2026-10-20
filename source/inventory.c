@@ -488,3 +488,134 @@ void furnaces_tick(void)
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Recipe book: craft straight from the inventory without arranging a grid
+// ---------------------------------------------------------------------------
+
+int recipe_total(void)
+{
+    return nrecipes;
+}
+
+void recipe_info(int r, RecipeInfo *ri)
+{
+    memset(ri, 0, sizeof(*ri));
+    if (r < 0 || r >= nrecipes)
+        return;
+    const Recipe *rc = &recipes[r];
+    ri->out = rc->out;
+    ri->count = rc->count;
+    ri->needs_table = rc->shapeless ? (rc->w > 4) : (rc->w > 2 || rc->h > 2);
+    int cells = rc->shapeless ? rc->w : rc->w * rc->h;
+    for (int i = 0; i < cells; i++) {
+        uint16_t k = rc->in[i];
+        if (!k)
+            continue;
+        int j;
+        for (j = 0; j < ri->ning; j++)
+            if (ri->ing[j] == k)
+                break;
+        if (j == ri->ning) {
+            ri->ing[j] = k;
+            ri->need[j] = 0;
+            ri->ning++;
+        }
+        ri->need[j]++;
+    }
+}
+
+bool recipe_ing_matches(uint16_t key, int id)
+{
+    return id && ing_match(key, id);
+}
+
+// Item shown for an ingredient key (groups use a representative item)
+int recipe_ing_display(uint16_t key)
+{
+    switch (key) {
+        case G_PLANKS: return B_PLANKS_OAK;
+        case G_LOG: return B_LOG_OAK;
+        case G_WOOL: return B_WOOL_WHITE;
+        case G_COAL: return I_COAL;
+        default: return key;
+    }
+}
+
+const char *recipe_ing_name(uint16_t key)
+{
+    switch (key) {
+        case G_PLANKS: return "Any Planks";
+        case G_LOG: return "Any Log";
+        case G_WOOL: return "Any Wool";
+        case G_COAL: return "Coal/Charcoal";
+        default: return item_valid(key) ? items[key].name : "?";
+    }
+}
+
+int recipe_have(uint16_t key, const ItemStack *inv, int n)
+{
+    int c = 0;
+    for (int i = 0; i < n; i++)
+        if (inv[i].count > 0 && ing_match(key, inv[i].id))
+            c += inv[i].count;
+    return c;
+}
+
+// Removes `need` items matching key, taking from the main inventory before the hotbar
+static bool take_ing(ItemStack *inv, int n, uint16_t key, int need)
+{
+    for (int pass = 0; pass < 2 && need > 0; pass++) {
+        for (int i = n - 1; i >= 0 && need > 0; i--) {
+            bool hot = i < 9;
+            if ((pass == 0) == hot)
+                continue;
+            if (inv[i].count <= 0 || !ing_match(key, inv[i].id))
+                continue;
+            int t = imin(inv[i].count, need);
+            inv[i].count -= t;
+            need -= t;
+            if (inv[i].count == 0)
+                stack_clear(&inv[i]);
+        }
+    }
+    return need == 0;
+}
+
+int recipe_times(int r, const ItemStack *inv, int n)
+{
+    RecipeInfo ri;
+    recipe_info(r, &ri);
+    if (!ri.ning)
+        return 0;
+    int times = 999;
+    for (int j = 0; j < ri.ning; j++) {
+        int t = recipe_have(ri.ing[j], inv, n) / ri.need[j];
+        if (t < times)
+            times = t;
+    }
+    return times;
+}
+
+int recipe_craft(int r, ItemStack *inv, int n, int times)
+{
+    RecipeInfo ri;
+    recipe_info(r, &ri);
+    if (!ri.ning || n > 64)
+        return 0;
+    int done = 0;
+    ItemStack tmp[64];
+    while (done < times) {
+        memcpy(tmp, inv, n * sizeof(ItemStack));
+        bool ok = true;
+        for (int j = 0; j < ri.ning && ok; j++)
+            ok = take_ing(tmp, n, ri.ing[j], ri.need[j]);
+        if (!ok)
+            break;
+        if (inv_add(tmp, n, ri.out, ri.count, 0) > 0)
+            break;   // no room for the result
+        memcpy(inv, tmp, n * sizeof(ItemStack));
+        done++;
+    }
+    return done;
+}

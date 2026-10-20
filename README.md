@@ -25,7 +25,8 @@
 - **Mobs**: pigs, cows, sheep and chickens; zombies, skeletons (with bows), spiders, and the explosive *Boomshroom*
 - **A living world**: day/night cycle, flowing water and lava, falling sand and gravel, leaf decay, growing crops and saplings, fire, TNT
 - **Farming, beds, doors, ladders, torches** and more
-- **Touch-screen inventory**, hotbar and menus on the bottom screen
+- **Easy crafting**: a recipe list shows everything you can make; pick one and press A, no grid arranging needed
+- **Touch-screen inventory**, hotbar and menus on the bottom screen, all of which also work with the buttons
 - **Saves** to the SD card, with 3 world slots
 - Sound effects and generative background music
 
@@ -65,6 +66,23 @@ memory, a faster CPU and the option of a larger 256×256 world.
 | START | Pause, save and quit |
 
 L and R can be swapped in Options, along with look speed, render distance, volume and other settings.
+
+### Crafting and inventory
+
+Open the inventory (or use a crafting table) and you land on the **Craft** tab: a list of recipes,
+with the ones you can make right now at the top.
+
+| Input | Craft tab | Items tab |
+|---|---|---|
+| D-pad | Choose a recipe (Left/Right page) | Move the cursor between slots |
+| A | Craft one | Pick up / put down |
+| X | Craft as many as possible | Take half a stack |
+| Y | | Quick-move (hotbar ↔ inventory, into chests and furnaces) |
+| L / R | Switch to Items | Switch to Craft |
+| B | Close | Close |
+
+You can also tap a recipe to select it and tap it again to craft. Recipes bigger than 2×2 need a
+crafting table. The classic grid is still on the Items tab.
 
 ## Building from source
 

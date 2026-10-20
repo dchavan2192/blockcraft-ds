@@ -59,8 +59,11 @@ static void frames(int n)
 {
     for (int i = 0; i < n; i++) {
         frame_counter++;
+#ifdef TEST_CRAFT
+        scanKeys();
+#endif
         game_frame(1, &acc);
-#ifndef TEST_TOUR
+#if !defined(TEST_TOUR) && !defined(TEST_CRAFT)
         hud_print(0, 1, cur_label, HP_YELLOW);
         {
             char b[32];
@@ -80,7 +83,7 @@ static void frames(int n)
 #endif
         }
 #endif
-#ifndef TEST_TOUR
+#if !defined(TEST_TOUR) && !defined(TEST_CRAFT)
         ui_text_report(lp, nlines);
 #endif
         swiWaitForVBlank();
@@ -172,6 +175,26 @@ void test_run(void)
     py = world.spawn_y + 1;
     if (py > 50) py = 50;
     report("Test world seed 777, spawn %d %d %d", px, py, pz);
+#ifdef TEST_CRAFT
+    {
+        ui_close();
+        test_input_override = false;
+        memset(player.inv, 0, sizeof(player.inv));
+        give(0, B_LOG_OAK, 3);
+        give(1, B_COBBLESTONE, 8);
+        give(2, I_COAL, 2);
+        give(9, I_IRON_INGOT, 3);
+        give(10, I_STRING, 3);
+        give(11, B_DIRT, 20);
+        place_player(px, py, pz, 0, 0);
+#ifdef CRAFT_TABLE
+        ui_open(UI_CRAFTING);
+#else
+        ui_open(UI_INVENTORY);
+#endif
+        while (1) frames(1);
+    }
+#endif
 #ifdef TEST_TOUR
     {
         clear_inputs();
@@ -474,9 +497,12 @@ void test_run(void)
     give(3, TOOL_ID(MAT_DIAMOND, TK_SWORD), 1);
     player.sel = 3;
     static const uint8_t mt[4] = { ET_ZOMBIE, ET_SKELETON, ET_SPIDER, ET_SHROOM };
-    for (int i = 0; i < 4; i++)
-        if (mn[i] >= 0 && entities[mn[i]].type == mt[i] && entities[mn[i]].ai != 9)
-            entity_damage(mn[i], 30, 0, 0, true);
+    for (int tries = 0; tries < 4; tries++) {   // a mob hit moments ago ignores damage briefly
+        for (int i = 0; i < 4; i++)
+            if (mn[i] >= 0 && entities[mn[i]].type == mt[i] && entities[mn[i]].ai != 9)
+                entity_damage(mn[i], 30, 0, 0, true);
+        frames(15);
+    }
     frames(60);
     int still = 0;
     for (int i = 0; i < 4; i++)

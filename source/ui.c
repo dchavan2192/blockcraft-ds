@@ -223,7 +223,7 @@ static void slot_box(int x, int y, int size)
 // Widgets
 // ---------------------------------------------------------------------------
 
-enum { WT_BUTTON = 1, WT_SLOT, WT_CITEM, WT_HOTBAR };
+enum { WT_BUTTON = 1, WT_SLOT, WT_CITEM, WT_HOTBAR, WT_BOOKROW };
 enum { SK_NORMAL = 0, SK_OUTPUT2, SK_OUTPUT3, SK_ARMOR, SK_FUEL, SK_FURNACE_OUT, SK_FURNACE_IN };
 
 typedef struct {
@@ -350,6 +350,7 @@ void ui_close(void)
 void ui_init(void)
 {
     is_dirty = true;
+    keysSetRepeat(14, 4);
     new_world_seed = rng_next();
 }
 
@@ -525,7 +526,7 @@ enum {
     B_DELETE, B_CONFIRM, B_OPT_LOOK_DN, B_OPT_LOOK_UP, B_OPT_INVERT, B_OPT_AUTOJUMP, B_OPT_RD_DN, B_OPT_RD_UP,
     B_OPT_VOL_DN, B_OPT_VOL_UP, B_OPT_MUSIC, B_OPT_COORDS, B_OPT_PEACEFUL, B_OPT_SWAP, B_DONE,
     B_HUD_INV, B_HUD_PAUSE, B_HUD_SNEAK, B_HUD_DROP, B_HUD_JUMP, B_SURVIVAL_TAB, B_TRASH,
-    B_HELP_NEXT,
+    B_HELP_NEXT, B_TAB_CRAFT, B_TAB_ITEMS, B_BOOK_UP, B_BOOK_DOWN, B_BOOK_CRAFT, B_BOOK_MAX,
 };
 
 static void inventory_section(int x, int y)
@@ -564,11 +565,19 @@ static void arrow_icon(int x, int y, int progress)
     }
 }
 
+static bool book_view;
+static void draw_book(bool table);
+static void tab_buttons(void);
+
 static void draw_inventory(void)
 {
     tex_tile_bg(TEX_STONE, 2, 5);
     panel(2, 20, 252, 170);
-    text(8, 6, "Inventory", COL_WHITE);
+    if (book_view) {
+        draw_book(false);
+        return;
+    }
+    tab_buttons();
     common_buttons();
     // armor
     static const char *anames[4] = { "Head", "Body", "Legs", "Feet" };
@@ -596,7 +605,11 @@ static void draw_crafting(void)
 {
     tex_tile_bg(TEX_PLANKS_OAK, 2, 5);
     panel(2, 20, 252, 170);
-    text(8, 6, "Crafting Table", COL_WHITE);
+    if (book_view) {
+        draw_book(true);
+        return;
+    }
+    tab_buttons();
     common_buttons();
     for (int i = 0; i < 9; i++)
         slot_widget(40 + (i % 3) * 20, 28 + (i / 3) * 20, &table_grid[i], SK_NORMAL, 0);
@@ -659,6 +672,283 @@ static void draw_chest(void)
             slot_widget(38 + col * 20, 86 + r * 19, &player.inv[9 + r * 9 + col], SK_NORMAL, 0);
     for (int col = 0; col < 9; col++)
         slot_widget(38 + col * 20, 148 + 20, &player.inv[col], SK_NORMAL, 0);
+}
+
+
+// ---------------------------------------------------------------------------
+// Recipe book: pick what to make from a list, no grid arranging needed
+// ---------------------------------------------------------------------------
+
+static bool book_view = true;     // "Craft" tab (recipe list) or "Items" tab (slots)
+static int book_recipe = -1;      // selected recipe id
+static int book_scroll;
+#define BOOK_MAX 200
+#define BOOK_ROWS 6
+#define BOOK_ROW_H 27
+static int16_t book_list[BOOK_MAX];
+static int16_t book_times[BOOK_MAX];
+static int book_n, book_sel;
+static bool book_table;
+
+static void book_build(bool table)
+{
+    book_table = table;
+    book_n = 0;
+    int total = recipe_total();
+    // craftable first, then the rest; in the inventory, table recipes come last
+    for (int pass = 0; pass < 3; pass++) {
+        for (int r = 0; r < total && book_n < BOOK_MAX; r++) {
+            RecipeInfo ri;
+            recipe_info(r, &ri);
+            bool usable = table || !ri.needs_table;
+            int t = usable ? recipe_times(r, player.inv, INV_SIZE) : 0;
+            bool want = pass == 0 ? (usable && t > 0) : pass == 1 ? (usable && t == 0) : !usable;
+            if (!want)
+                continue;
+            book_list[book_n] = r;
+            book_times[book_n] = t;
+            book_n++;
+        }
+    }
+    book_sel = 0;
+    for (int i = 0; i < book_n; i++)
+        if (book_list[i] == book_recipe) {
+            book_sel = i;
+            break;
+        }
+    if (book_n)
+        book_recipe = book_list[book_sel];
+    if (book_sel < book_scroll)
+        book_scroll = book_sel;
+    if (book_sel >= book_scroll + BOOK_ROWS)
+        book_scroll = book_sel - BOOK_ROWS + 1;
+    book_scroll = iclamp(book_scroll, 0, imax(0, book_n - BOOK_ROWS));
+}
+
+static void book_select(int i)
+{
+    if (!book_n)
+        return;
+    i = iclamp(i, 0, book_n - 1);
+    book_sel = i;
+    book_recipe = book_list[i];
+    if (book_sel < book_scroll)
+        book_scroll = book_sel;
+    if (book_sel >= book_scroll + BOOK_ROWS)
+        book_scroll = book_sel - BOOK_ROWS + 1;
+    is_dirty = true;
+}
+
+static void book_craft(bool all)
+{
+    if (!book_n || book_recipe < 0)
+        return;
+    RecipeInfo ri;
+    recipe_info(book_recipe, &ri);
+    if (ri.needs_table && !book_table) {
+        sound_play(SFX_CLICK, 50, 64, 60);
+        return;
+    }
+    int done = recipe_craft(book_recipe, player.inv, INV_SIZE, all ? 64 : 1);
+    if (done > 0)
+        sound_play(SFX_POP, 90, 64, 110);
+    else
+        sound_play(SFX_CLICK, 50, 64, 60);
+    is_dirty = true;
+}
+
+static void tab_buttons(void)
+{
+    // two big tabs; the active one is underlined in yellow
+    button(2, 1, 54, 18, B_TAB_CRAFT, "Craft", true);
+    button(58, 1, 54, 18, B_TAB_ITEMS, "Items", true);
+    fill(book_view ? 4 : 60, 16, 50, 2, COL_YELLOW);
+}
+
+static void book_wrap_name(int cx, int y, const char *name, uint16_t col)
+{
+    // centered, wrapped onto two lines if needed
+    if (text_width(name) <= 80) {
+        text_center(cx, y, name, col, 1);
+        return;
+    }
+    char a[32], b[32];
+    int n = strlen(name), split = -1;
+    for (int i = 0; i < n && i < 31; i++) {
+        if (name[i] == ' ') {
+            memcpy(a, name, i);
+            a[i] = 0;
+            if (text_width(a) <= 80)
+                split = i;
+        }
+    }
+    if (split < 0) {
+        text_center(cx, y, name, col, 1);
+        return;
+    }
+    memcpy(a, name, split);
+    a[split] = 0;
+    snprintf(b, sizeof(b), "%s", name + split + 1);
+    text_center(cx, y, a, col, 1);
+    text_center(cx, y + 9, b, col, 1);
+}
+
+static void draw_book(bool table)
+{
+    book_build(table);
+    tex_tile_bg(table ? TEX_PLANKS_OAK : TEX_STONE, 2, 5);
+    tab_buttons();
+    text(122, 6, table ? "Crafting" : "Inventory", COL_WHITE);
+    button(214, 2, 40, 16, B_CLOSE, "Done", true);
+
+    // recipe list
+    panel(2, 20, 164, 170);
+    for (int row = 0; row < BOOK_ROWS; row++) {
+        int i = book_scroll + row;
+        int y = 23 + row * BOOK_ROW_H;
+        if (i >= book_n)
+            break;
+        int r = book_list[i];
+        RecipeInfo ri;
+        recipe_info(r, &ri);
+        bool usable = table || !ri.needs_table;
+        int t = book_times[i];
+        add_widget(WT_BOOKROW, 5, y, 132, BOOK_ROW_H - 1, i);
+        bool selected = i == book_sel;
+        fill(5, y, 132, BOOK_ROW_H - 1, selected ? C(10, 14, 24) : (t > 0 ? C(20, 22, 20) : C(19, 19, 19)));
+        if (selected) {
+            fill(5, y, 132, 1, COL_YELLOW);
+            fill(5, y + BOOK_ROW_H - 2, 132, 1, COL_YELLOW);
+        }
+        slot_box(8, y + 4, 18);
+        ItemStack out = { .id = ri.out, .count = ri.count };
+        draw_stack(9, y + 5, &out, 1);
+        const char *name = item_valid(ri.out) ? items[ri.out].name : "?";
+        uint16_t nc = selected ? COL_WHITE : (t > 0 ? COL_TEXT : C(13, 13, 13));
+        text_ex(30, y + 4, name, nc, false, 1);
+        char sub[24];
+        uint16_t sc;
+        if (!usable) {
+            snprintf(sub, sizeof(sub), "needs crafting table");
+            sc = selected ? C(26, 20, 12) : C(16, 10, 6);
+        } else if (t > 0) {
+            snprintf(sub, sizeof(sub), "can make %d", (int)imin(t, 99));
+            sc = selected ? C(16, 31, 16) : C(3, 14, 3);
+        } else {
+            snprintf(sub, sizeof(sub), "missing items");
+            sc = selected ? C(28, 16, 16) : C(18, 8, 8);
+        }
+        text_ex(30, y + 14, sub, sc, false, 1);
+    }
+    if (!book_n)
+        text(12, 60, "No recipes", COL_TEXT);
+    // scroll buttons and position bar
+    button(140, 23, 24, 78, B_BOOK_UP, "^", book_scroll > 0);
+    button(140, 103, 24, 78, B_BOOK_DOWN, "v", book_scroll + BOOK_ROWS < book_n);
+
+    // details of the selected recipe
+    panel(168, 20, 86, 170);
+    if (book_n) {
+        RecipeInfo ri;
+        recipe_info(book_recipe, &ri);
+        bool usable = table || !ri.needs_table;
+        int t = book_times[book_sel];
+        ItemStack out = { .id = ri.out, .count = ri.count };
+        slot_box(194, 24, 36);
+        draw_stack(196, 26, &out, 2);
+        book_wrap_name(211, 63, item_valid(ri.out) ? items[ri.out].name : "?", COL_TEXT);
+        for (int j = 0; j < ri.ning && j < 4; j++) {
+            int y = 84 + j * 18;
+            ItemStack ing = { .id = recipe_ing_display(ri.ing[j]), .count = 1 };
+            draw_stack(172, y, &ing, 1);
+            int have = recipe_have(ri.ing[j], player.inv, INV_SIZE);
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%d/%d", (int)imin(have, 999), ri.need[j]);
+            text_ex(192, y + 4, buf, have >= ri.need[j] ? C(3, 15, 3) : C(20, 4, 4), false, 1);
+        }
+        bool can = usable && t > 0;
+        button(171, 142, 80, 22, B_BOOK_CRAFT, "A: Craft", can);
+        button(171, 166, 80, 22, B_BOOK_MAX, t > 1 && usable ? "X: Craft all" : "X: Craft all", can && t > 1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Keypad control of slot screens
+// ---------------------------------------------------------------------------
+
+static int key_slot = -1;          // k-th slot widget under the keypad cursor (-1 = hidden)
+
+static int slot_widget_index(int k)
+{
+    int n = 0;
+    for (int i = 0; i < nwidgets; i++)
+        if (widgets[i].type == WT_SLOT) {
+            if (n == k)
+                return i;
+            n++;
+        }
+    return -1;
+}
+
+static int slot_widget_count(void)
+{
+    int n = 0;
+    for (int i = 0; i < nwidgets; i++)
+        if (widgets[i].type == WT_SLOT)
+            n++;
+    return n;
+}
+
+static void key_move(int dx, int dy)
+{
+    int cur = slot_widget_index(key_slot);
+    if (cur < 0) {
+        key_slot = 0;
+        return;
+    }
+    Widget *a = &widgets[cur];
+    int ax = a->x + a->w / 2, ay = a->y + a->h / 2;
+    int best = -1, best_score = 1 << 30, k = 0, best_k = key_slot;
+    for (int i = 0; i < nwidgets; i++) {
+        if (widgets[i].type != WT_SLOT)
+            continue;
+        Widget *b = &widgets[i];
+        int bx = b->x + b->w / 2 - ax, by = b->y + b->h / 2 - ay;
+        int along = bx * dx + by * dy;          // distance in the pressed direction
+        int across = iabs(bx * dy) + iabs(by * dx);
+        if (along > 4) {
+            int score = along + across * 3;
+            if (score < best_score) {
+                best_score = score;
+                best = i;
+                best_k = k;
+            }
+        }
+        k++;
+    }
+    if (best >= 0)
+        key_slot = best_k;
+}
+
+static bool slot_screen(void)
+{
+    return ((screen == UI_INVENTORY || screen == UI_CRAFTING) && !book_view) || screen == UI_CHEST || screen == UI_FURNACE;
+}
+
+static void draw_key_cursor(void)
+{
+    if (!slot_screen() || key_slot < 0)
+        return;
+    if (key_slot >= slot_widget_count())
+        key_slot = slot_widget_count() - 1;
+    int i = slot_widget_index(key_slot);
+    if (i < 0)
+        return;
+    Widget *w = &widgets[i];
+    fill(w->x - 2, w->y - 2, w->w + 4, 2, COL_YELLOW);
+    fill(w->x - 2, w->y + w->h, w->w + 4, 2, COL_YELLOW);
+    fill(w->x - 2, w->y, 2, w->h, COL_YELLOW);
+    fill(w->x + w->w, w->y, 2, w->h, COL_YELLOW);
 }
 
 // Creative item list
@@ -924,9 +1214,10 @@ static const char *help_pages[][12] = {
         "Furnaces smelt ore with coal.",
         "Monsters come out at night!",
         "Sleep in a bed to skip the night.",
-        "Eat food to keep your hunger up.",
-        "Use 'Move' mode for quick transfers.",
-        "Torches keep monsters away.",
+        "Craft tab: pick a recipe, A = craft,",
+        " X = craft all. L/R switch tabs.",
+        "Items tab: D-pad + A to move items,",
+        " Y = quick move, X = take half.",
         NULL,
     },
 };
@@ -982,6 +1273,7 @@ static void redraw(void)
         case UI_CONFIRM_DELETE: draw_confirm_delete(); break;
         case UI_SLEEP: draw_sleep(); break;
     }
+    draw_key_cursor();
     DC_FlushRange(fb, sizeof(fb));
     dmaCopy(fb, BG_GFX_SUB, sizeof(fb));
 }
@@ -1044,6 +1336,19 @@ static void on_button(int id)
         case B_PLAY: screen = UI_WORLDS; break;
         case B_HELP: help_page = 0; options_from = screen; screen = UI_HELP; break;
         case B_HELP_NEXT: help_page ^= 1; break;
+        case B_TAB_CRAFT:
+            return_craft_items(player.craft, 4);
+            return_craft_items(table_grid, 9);
+            book_view = true;
+            break;
+        case B_TAB_ITEMS: book_view = false; break;
+        case B_BOOK_UP: book_scroll = imax(0, book_scroll - BOOK_ROWS); book_select(imin(book_sel, book_scroll + BOOK_ROWS - 1)); break;
+        case B_BOOK_DOWN:
+            book_scroll = imin(imax(0, book_n - BOOK_ROWS), book_scroll + BOOK_ROWS);
+            book_select(imax(book_sel, book_scroll));
+            break;
+        case B_BOOK_CRAFT: book_craft(false); break;
+        case B_BOOK_MAX: book_craft(true); break;
         case B_SLOT0: case B_SLOT1: case B_SLOT2:
             menu_slot = id - B_SLOT0;
             if (slot_info[menu_slot].exists) {
@@ -1134,11 +1439,78 @@ static void handle_widget_tap(int wi)
             is_dirty = true;
             break;
         }
+        case WT_BOOKROW:
+            if (wd->id == book_sel)
+                book_craft(false);      // tap the selected row again to craft
+            else {
+                book_select(wd->id);
+                sound_play(SFX_CLICK, 50, 64, 140);
+            }
+            is_dirty = true;
+            break;
         case WT_HOTBAR:
             player.sel = wd->id;
             sound_play(SFX_CLICK, 50, 64, 140);
             is_dirty = true;
             break;
+    }
+}
+
+// Buttons and D-pad inside the inventory-type screens
+static void ui_menu_keys(void)
+{
+    uint32_t down = keysDown(), rep = keysDownRepeat();
+    if (!ui_in_game_menu() || screen == UI_CREATIVE) {
+        if (screen == UI_CREATIVE && (down & KEY_B))
+            ui_close();
+        return;
+    }
+    if (down & KEY_B) {
+        ui_close();
+        return;
+    }
+    bool tabs = screen == UI_INVENTORY || screen == UI_CRAFTING;
+    if (tabs && (down & (KEY_L | KEY_R))) {
+        on_button(book_view ? B_TAB_ITEMS : B_TAB_CRAFT);
+        key_slot = book_view ? -1 : 0;
+        return;
+    }
+    if (tabs && book_view) {
+        if (rep & KEY_UP) book_select(book_sel - 1);
+        if (rep & KEY_DOWN) book_select(book_sel + 1);
+        if (rep & KEY_LEFT) book_select(book_sel - BOOK_ROWS);
+        if (rep & KEY_RIGHT) book_select(book_sel + BOOK_ROWS);
+        if (rep & KEY_A) book_craft(false);
+        if (down & KEY_X) book_craft(true);
+        return;
+    }
+    // slot screens: move a cursor over the slots
+    int dx = 0, dy = 0;
+    if (rep & KEY_UP) dy = -1;
+    else if (rep & KEY_DOWN) dy = 1;
+    else if (rep & KEY_LEFT) dx = -1;
+    else if (rep & KEY_RIGHT) dx = 1;
+    if (dx || dy) {
+        if (key_slot < 0)
+            key_slot = 0;
+        else
+            key_move(dx, dy);
+        is_dirty = true;
+    }
+    if (down & (KEY_A | KEY_X | KEY_Y)) {
+        if (key_slot < 0) {
+            key_slot = 0;
+            is_dirty = true;
+            return;
+        }
+        int wi = slot_widget_index(key_slot);
+        if (wi < 0)
+            return;
+        int saved = click_mode;
+        click_mode = (down & KEY_Y) ? 2 : (down & KEY_X) ? 1 : 0;
+        click_slot(&widgets[wi]);
+        click_mode = saved;
+        is_dirty = true;
     }
 }
 
@@ -1149,6 +1521,11 @@ void ui_frame(void)
     ui_jump_button = false;
     uint32_t held = keysHeld();
     uint32_t down = keysDown();
+    ui_menu_keys();
+    if ((down & KEY_TOUCH) && key_slot >= 0) {
+        key_slot = -1;      // touching hides the keypad cursor
+        is_dirty = true;
+    }
     if (held & KEY_TOUCH) {
         touchPosition tp;
         touchRead(&tp);

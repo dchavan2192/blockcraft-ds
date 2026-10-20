@@ -20,6 +20,23 @@ bool craft_match(const ItemStack *grid, int gw, ItemStack *result);
 void craft_consume(ItemStack *grid, int gw);
 void recipes_init(void);
 
+// Recipe book (crafting directly from an inventory)
+typedef struct {
+    uint16_t out;
+    uint8_t count;
+    uint8_t needs_table;   // larger than 2x2
+    uint8_t ning;          // distinct ingredients
+    uint16_t ing[9];       // ingredient keys (item ids or groups)
+    uint8_t need[9];       // amount of each per craft
+} RecipeInfo;
+int recipe_total(void);
+void recipe_info(int r, RecipeInfo *ri);
+int recipe_ing_display(uint16_t key);
+const char *recipe_ing_name(uint16_t key);
+int recipe_have(uint16_t key, const ItemStack *inv, int n);
+int recipe_times(int r, const ItemStack *inv, int n);          // how many times it can be crafted now
+int recipe_craft(int r, ItemStack *inv, int n, int times);     // returns crafts done
+
 // Chests
 typedef struct {
     int16_t x, z;
