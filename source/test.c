@@ -588,6 +588,9 @@ void test_run(void)
 
     // ---- T17: experience ----
     cur_label = "T17 xp";
+    for (int i = 0; i < MAX_ENTITIES; i++)
+        if (entities[i].type == ET_XP)
+            entities[i].type = ET_NONE;     // leftovers from earlier tests
     player.xp_level = 0;
     player.xp_points = 0;
     place_player(px, py, pz + 6, 0, 10);

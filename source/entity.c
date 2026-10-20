@@ -30,10 +30,10 @@ static const EntityInfo einfo[ET_COUNT] = {
     [ET_COW] = { "Cow", 7, 22, 10, 260, 0 },
     [ET_SHEEP] = { "Sheep", 7, 20, 8, 300, 0 },
     [ET_CHICKEN] = { "Chicken", 3, 11, 4, 280, 0 },
-    [ET_ZOMBIE] = { "Zombie", 5, 31, 20, 360, 1 },
-    [ET_SKELETON] = { "Skeleton", 5, 31, 20, 380, 1 },
-    [ET_SPIDER] = { "Spider", 11, 14, 16, 480, 1 },
-    [ET_SHROOM] = { "Boomshroom", 5, 27, 20, 330, 1 },
+    [ET_ZOMBIE] = { "Zombie", 5, 31, 20, 250, 1 },
+    [ET_SKELETON] = { "Skeleton", 5, 31, 20, 270, 1 },
+    [ET_SPIDER] = { "Spider", 11, 14, 16, 330, 1 },
+    [ET_SHROOM] = { "Boomshroom", 5, 27, 20, 230, 1 },
     [ET_ARROW] = { "Arrow", 1, 2, 1, 0, 0 },
     [ET_TNT] = { "TNT", 8, 16, 1, 0, 0 },
     [ET_XP] = { "Experience", 1, 2, 1, 0, 0 },
@@ -511,11 +511,19 @@ static void hostile_ai(Entity *e, int idx)
     if (e->type == ET_SPIDER && day && sky >= 12 && e->ai != 1)
         target_ok = false;
 
-    bool chasing = target_ok && dist < FX(16) && iabs(dy) < FX(8);
-    if (chasing && e->type != ET_SPIDER && dist > FX(4)) {
+    // Notice the player only fairly close by and with a clear view (unless hit by them)
+    bool provoked = e->ai == 1;
+    int32_t sight = provoked ? FX(16) : FX(11);
+    bool chasing = target_ok && dist < sight && iabs(dy) < FX(5);
+    if (chasing && !provoked && dist > FX(2)) {
         int32_t ey = e->body.y + e->body.h - 410;
-        chasing = line_of_sight(e->body.x, ey, e->body.z, p->body.x, p->body.y + FX(1.5), p->body.z) || e->ai == 1;
+        chasing = line_of_sight(e->body.x, ey, e->body.z, p->body.x, p->body.y + FX(1.5), p->body.z);
     }
+    // a short reaction delay before giving chase (head_pitch reused as a countdown)
+    if (chasing && !provoked && e->head_pitch == 0)
+        e->head_pitch = 12 + rng_range(16);
+    if (!chasing)
+        e->head_pitch = 0;
     if (!chasing) {
         passive_ai(e);
         if (e->type == ET_SHROOM && e->fuse > 0)
@@ -523,16 +531,23 @@ static void hostile_ai(Entity *e, int idx)
         return;
     }
     e->ai = e->ai == 1 ? 1 : 0;
-    int ty = yaw_toward(dx, dz);
-    turn_toward(e, ty, 900);
+    // aim roughly, not perfectly: a small wandering offset, and slower turning
+    if ((e->age & 31) == 0)
+        e->target_yaw = rng_range(ANG_DEG(40)) - ANG_DEG(20);
+    int ty = yaw_toward(dx, dz) + (dist > FX(3) ? e->target_yaw : 0);
+    turn_toward(e, ty, 450);
+    if (e->head_pitch > 1) {        // still noticing: turn to look, don't move yet
+        e->head_pitch--;
+        return;
+    }
     switch (e->type) {
         case ET_ZOMBIE:
             walk(e, speed);
-            if (dist < FX(1.3) && iabs(dy) < FX(2) && e->attack_cd == 0) {
-                player_damage(3, DMG_MOB);
-                player.vx += fxmul(sinLerp(e->yaw), FX(0.3));
-                player.vz -= fxmul(cosLerp(e->yaw), FX(0.3));
-                e->attack_cd = 20;
+            if (dist < FX(1.2) && iabs(dy) < FX(2) && e->attack_cd == 0) {
+                player_damage(2, DMG_MOB);
+                player.vx += fxmul(sinLerp(e->yaw), FX(0.2));
+                player.vz -= fxmul(cosLerp(e->yaw), FX(0.2));
+                e->attack_cd = 30;
             }
             if ((rng_next() & 511) == 0)
                 sound_play_at(SFX_ZOMBIE, e->body.x, e->body.y, e->body.z, 80, 100);
@@ -542,38 +557,42 @@ static void hostile_ai(Entity *e, int idx)
                 walk(e, speed);
             else if (dist < FX(5))
                 walk(e, -speed);
-            if (e->attack_cd == 0 && dist < FX(15)) {
+            if (e->attack_cd == 0 && dist < FX(12)) {
                 int32_t ex = e->body.x, ey = e->body.y + FX(1.5), ez = e->body.z;
                 int32_t tx = dx, ty2 = dy + FX(1.2) - FX(1.5) + dist / 10, tz = dz;
                 // normalize
                 int32_t len = dist_xz(0, 0, tx, tz) + iabs(ty2) / 2;
                 if (len < 4096) len = 4096;
                 int32_t nx = fxdiv(tx, len), ny = fxdiv(ty2, len), nz = fxdiv(tz, len);
-                entity_shoot_arrow(ex + nx / 2, ey, ez + nz / 2, nx, ny, nz, FX(1.4), false);
+                // not a perfect shot
+                nx += rng_range(FX(0.24)) - FX(0.12);
+                nz += rng_range(FX(0.24)) - FX(0.12);
+                ny += rng_range(FX(0.12)) - FX(0.06);
+                entity_shoot_arrow(ex + nx / 2, ey, ez + nz / 2, nx, ny, nz, FX(1.15), false);
                 sound_play_at(SFX_BOW, e->body.x, e->body.y, e->body.z, 90, 110);
-                e->attack_cd = 40 + rng_range(20);
+                e->attack_cd = 60 + rng_range(40);
             }
             break;
         case ET_SPIDER:
             walk(e, speed);
-            if (dist < FX(3) && dist > FX(1.5) && e->on_ground && rng_range(10) == 0) {
-                e->vy = FX(0.4);
-                e->vx += fxmul(sinLerp(e->yaw), FX(0.3));
-                e->vz -= fxmul(cosLerp(e->yaw), FX(0.3));
+            if (dist < FX(3) && dist > FX(1.5) && e->on_ground && rng_range(30) == 0) {
+                e->vy = FX(0.35);
+                e->vx += fxmul(sinLerp(e->yaw), FX(0.2));
+                e->vz -= fxmul(cosLerp(e->yaw), FX(0.2));
             }
             if ((e->body.hit_x || e->body.hit_z))
                 e->vy = FX(0.2);  // climb walls
-            if (dist < FX(1.5) && iabs(dy) < FX(2) && e->attack_cd == 0) {
+            if (dist < FX(1.4) && iabs(dy) < FX(2) && e->attack_cd == 0) {
                 player_damage(2, DMG_MOB);
-                e->attack_cd = 20;
+                e->attack_cd = 30;
             }
             break;
         case ET_SHROOM:
-            if (dist < FX(2.8)) {
+            if (dist < FX(2.5) || (e->fuse > 0 && dist < FX(4))) {
                 if (e->fuse == 0)
                     sound_play_at(SFX_FUSE, e->body.x, e->body.y, e->body.z, 110, 100);
                 e->fuse++;
-                if (e->fuse >= 30) {
+                if (e->fuse >= 40) {   // 2 seconds to back off
                     e->type = ET_NONE;
                     explosion(e->body.x, e->body.y + FX(0.5), e->body.z, 3);
                     return;
