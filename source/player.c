@@ -171,6 +171,12 @@ void player_damage(int amount, int cause)
             default: death_message = "You died"; break;
         }
         drop_all_items();
+        // drop some of the experience
+        int lost = imin(player.xp_level * 7, 100);
+        if (lost > 0)
+            entity_spawn_xp(player.body.x, player.body.y + FX(0.5), player.body.z, lost);
+        player.xp_level = 0;
+        player.xp_points = 0;
         ui_open(UI_DEATH);
     }
 }
@@ -372,6 +378,47 @@ static void damage_held_tool(int amount)
     }
 }
 
+int xp_to_next_level(int level)
+{
+    if (level < 16)
+        return 2 * level + 7;
+    if (level < 31)
+        return 5 * level - 38;
+    return 9 * level - 158;
+}
+
+void player_add_xp(int points)
+{
+    if (player.mode != MODE_SURVIVAL || points <= 0)
+        return;
+    player.xp_points += points;
+    bool up = false;
+    while (player.xp_points >= xp_to_next_level(player.xp_level)) {
+        player.xp_points -= xp_to_next_level(player.xp_level);
+        player.xp_level++;
+        up = true;
+    }
+    if (up) {
+        sound_play(SFX_POP, 120, 64, 200);
+        if (player.xp_level % 5 == 0) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "Level %d!", player.xp_level);
+            game_message(buf, 40);
+        }
+    }
+}
+
+// Experience for mining an ore (only when it actually drops something)
+static int ore_xp(int id)
+{
+    switch (id) {
+        case B_COAL_ORE: return rng_range(3);
+        case B_DIAMOND_ORE: return 3 + rng_range(5);
+        case B_REDSTONE_ORE: return 1 + rng_range(5);
+        default: return 0;
+    }
+}
+
 static void break_target(void)
 {
     int x = player.tx, y = player.ty, z = player.tz;
@@ -385,6 +432,11 @@ static void break_target(void)
     particles_block(x, y, z, id);
     sound_block(id, false, (x << 12) + 2048, (y << 12) + 2048, (z << 12) + 2048);
     sim_break_block(x, y, z, drops, h->id);
+    if (drops) {
+        int xp = ore_xp(id);
+        if (xp)
+            entity_spawn_xp((x << 12) + 2048, (y << 12) + 1024, (z << 12) + 2048, xp);
+    }
     if (player.mode != MODE_CREATIVE) {
         if (blocks[id].hardness > 0)
             damage_held_tool(1);
@@ -416,7 +468,7 @@ static bool cell_blocked_by_entity(int x, int y, int z)
         return true;
     for (int i = 0; i < MAX_ENTITIES; i++) {
         Entity *e = &entities[i];
-        if (e->type == ET_NONE || e->type == ET_ITEM || e->type == ET_ARROW)
+        if (e->type == ET_NONE || e->type == ET_ITEM || e->type == ET_ARROW || e->type == ET_XP)
             continue;
         if (body_intersects_cell(&e->body, x, y, z))
             return true;
@@ -490,7 +542,7 @@ static bool place_door(int x, int y, int z)
     if (cell_blocked_by_entity(x, y, z) || cell_blocked_by_entity(x, y + 1, z))
         return false;
     int f = player_facing();
-    // panel on the far side of the cell from the player
+    // closed panel sits on the edge of the cell nearest the player
     world_set(x, y, z, B_DOOR + f);
     world_set(x, y + 1, z, B_DOOR + f + 8);
     sound_play(SFX_DIG_WOOD, 100, 64, 100);
@@ -520,10 +572,11 @@ static void open_or_toggle_door(int x, int y, int z, int id)
     int top = idx & 8;
     int by = top ? y - 1 : y;
     int bot = world_get(x, by, z), up = world_get(x, by + 1, z);
+    // toggle the "open" bit of the door state (not of the raw block id)
     if (is_door(bot))
-        world_set(x, by, z, bot ^ 4);
+        world_set(x, by, z, B_DOOR + ((bot - B_DOOR) ^ 4));
     if (is_door(up))
-        world_set(x, by + 1, z, up ^ 4);
+        world_set(x, by + 1, z, B_DOOR + ((up - B_DOOR) ^ 4));
     sound_play(SFX_DOOR, 100, 64, 100);
 }
 

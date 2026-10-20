@@ -141,7 +141,7 @@ void render_rel(int32_t wx, int32_t wy, int32_t wz, int32_t *rx, int32_t *ry, in
 }
 
 // Sphere visibility in view space
-ARM_CODE static bool sphere_visible(int32_t cx, int32_t cy, int32_t cz, int32_t r)
+ITCM_CODE ARM_CODE static bool sphere_visible(int32_t cx, int32_t cy, int32_t cz, int32_t r)
 {
     int32_t vx = fxmul(cx, cos_yaw) + fxmul(cz, sin_yaw);
     int32_t vz1 = -fxmul(cx, sin_yaw) + fxmul(cz, cos_yaw);
@@ -212,7 +212,7 @@ static uint8_t cached_exit_mask = 0x3F;
 static int cached_cx = -9999, cached_cy, cached_cz;
 static uint32_t cached_dirty_stamp;
 
-ARM_CODE static void traverse(void)
+ITCM_CODE ARM_CODE static void traverse(void)
 {
     nvis = 0;
     poly_budget_used = 0;

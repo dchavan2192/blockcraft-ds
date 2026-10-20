@@ -36,6 +36,7 @@ static const EntityInfo einfo[ET_COUNT] = {
     [ET_SHROOM] = { "Boomshroom", 5, 27, 20, 330, 1 },
     [ET_ARROW] = { "Arrow", 1, 2, 1, 0, 0 },
     [ET_TNT] = { "TNT", 8, 16, 1, 0, 0 },
+    [ET_XP] = { "Experience", 1, 2, 1, 0, 0 },
 };
 
 const char *entity_name(int type)
@@ -230,7 +231,7 @@ static int mob_sound(int type)
 void entity_damage(int idx, int dmg, int32_t kx, int32_t kz, bool by_player)
 {
     Entity *e = &entities[idx];
-    if (e->type == ET_NONE || e->type == ET_ITEM || e->type == ET_ARROW)
+    if (e->type == ET_NONE || e->type == ET_ITEM || e->type == ET_ARROW || e->type == ET_XP)
         return;
     if (e->type == ET_TNT)
         return;
@@ -254,6 +255,8 @@ void entity_damage(int idx, int dmg, int32_t kx, int32_t kz, bool by_player)
         e->ai = 9;  // dying
         e->timer = 18;
         drop_loot(e);
+        if (by_player)
+            entity_spawn_xp(e->body.x, e->body.y + FX(0.5), e->body.z, einfo[e->type].hostile ? 5 : 1 + rng_range(3));
     }
 }
 
@@ -287,7 +290,7 @@ int entity_raycast(int32_t ex, int32_t ey, int32_t ez, int32_t dx, int32_t dy, i
     int32_t best_t = maxd;
     for (int i = 0; i < MAX_ENTITIES; i++) {
         Entity *e = &entities[i];
-        if (e->type == ET_NONE || e->type == ET_ITEM || e->type == ET_ARROW || e->ai == 9)
+        if (e->type == ET_NONE || e->type == ET_ITEM || e->type == ET_ARROW || e->type == ET_XP || e->ai == 9)
             continue;
         int32_t rx = world_wrap_delta_fx(e->body.x - ex), rz = world_wrap_delta_fx(e->body.z - ez);
         int32_t ry = e->body.y - ey;
@@ -372,7 +375,7 @@ void explosion(int32_t x, int32_t y, int32_t z, int radius)
             continue;
         int32_t d = dist_xz(e->body.x, e->body.z, x, z) + iabs(e->body.y - y);
         if (d < pr) {
-            if (e->type == ET_ITEM || e->type == ET_ARROW) {
+            if (e->type == ET_ITEM || e->type == ET_ARROW || e->type == ET_XP) {
                 if (rng_range(3) == 0)
                     e->type = ET_NONE;
                 continue;
@@ -698,6 +701,8 @@ static void arrow_tick(Entity *e, int idx)
     e->yaw = yaw_toward(e->vx, e->vz);
 }
 
+static void xp_tick(Entity *e);
+
 static void tnt_tick(Entity *e)
 {
     body_move(&e->body, e->vx, e->vy, e->vz, 0);
@@ -822,6 +827,9 @@ void entities_tick(void)
                 break;
             case ET_TNT:
                 tnt_tick(e);
+                break;
+            case ET_XP:
+                xp_tick(e);
                 break;
             default:
                 if (e->ai == 9) {
@@ -1268,6 +1276,100 @@ static void render_particles(void)
     }
 }
 
+// ---------------------------------------------------------------------------
+// Experience orbs
+// ---------------------------------------------------------------------------
+
+void entity_spawn_xp(int32_t x, int32_t y, int32_t z, int amount)
+{
+    static const int sizes[] = { 37, 17, 7, 3, 1 };
+    int orbs = 0;
+    while (amount > 0 && orbs < 6) {
+        int v = 1;
+        for (int k = 0; k < 5; k++)
+            if (amount >= sizes[k]) {
+                v = sizes[k];
+                break;
+            }
+        if (orbs == 5)
+            v = amount;     // last orb takes the rest
+        int i = entity_spawn(ET_XP, x, y, z);
+        if (i < 0)
+            return;
+        Entity *e = &entities[i];
+        e->health = v;
+        e->vx = (rng_range(400) - 200);
+        e->vz = (rng_range(400) - 200);
+        e->vy = FX(0.15) + rng_range(400);
+        e->pickup_delay = 8;
+        amount -= v;
+        orbs++;
+    }
+}
+
+static void xp_tick(Entity *e)
+{
+    if (e->pickup_delay > 0)
+        e->pickup_delay--;
+    int32_t dx = world_wrap_delta_fx(player.body.x - e->body.x);
+    int32_t dz = world_wrap_delta_fx(player.body.z - e->body.z);
+    int32_t dy = player.body.y + FX(0.8) - e->body.y;
+    if (!player.dead && player.mode == MODE_SURVIVAL && e->pickup_delay == 0 &&
+        iabs(dx) < FX(7) && iabs(dz) < FX(7) && iabs(dy) < FX(7)) {
+        int32_t d = iabs(dx) + iabs(dz) + iabs(dy);
+        // pull harder as it gets closer
+        int32_t pull = d < FX(2) ? 10 : d < FX(4) ? 20 : 40;
+        e->vx += dx / pull;
+        e->vz += dz / pull;
+        e->vy += dy / pull;
+        if (iabs(dx) < FX(0.8) && iabs(dz) < FX(0.8) && iabs(dy) < FX(1.2)) {
+            player_add_xp(e->health);
+            sound_play(SFX_POP, 60, 64, 150 + rng_range(50));
+            e->type = ET_NONE;
+            return;
+        }
+    }
+    e->vx = iclamp(e->vx, -FX(0.5), FX(0.5));
+    e->vz = iclamp(e->vz, -FX(0.5), FX(0.5));
+    e->vy = iclamp(e->vy, -FX(0.5), FX(0.5));
+    body_move(&e->body, e->vx, e->vy, e->vz, 0);
+    if (e->body.hit_y) e->vy = 0;
+    e->vy = fxmul(e->vy - FX(0.03), FX(0.98));
+    int32_t slip = e->body.on_ground ? FX(0.6) : FX(0.96);
+    e->vx = fxmul(e->vx, slip);
+    e->vz = fxmul(e->vz, slip);
+    if (e->age > 6000 || e->body.y < -FX(16))
+        e->type = ET_NONE;
+}
+
+static void render_xp(Entity *e)
+{
+    int32_t rx, ry, rz;
+    render_rel(e->body.x, e->body.y, e->body.z, &rx, &ry, &rz);
+    if (!on_screen(rx, ry, rz))
+        return;
+    int32_t bob = sinLerp(e->age * 500) >> 5;
+    int sz = e->health >= 17 ? 4 : e->health >= 7 ? 3 : e->health >= 3 ? 2 : 1;
+    int32_t r = 40 + sz * 16;                                    // half size: ~0.05-0.1 block (quarter-scale units)
+    glPushMatrix();
+    glTranslatef32(rx >> 2, (ry + 400 + bob) >> 2, rz >> 2);
+    glRotateYi(-cam.yaw);
+    glRotateZi(ANG_FULL / 8);
+    GFX_TEX_FORMAT = 0;
+    int pulse = (sinLerp(e->age * 900) + 4096) >> 6;          // 0..128
+    glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE | POLY_FOG | POLY_ID(0));
+    glBegin(GL_QUADS);
+    glColor3b(110 + pulse, 255, 30 + pulse / 3);
+    glVertex3v16(-r, -r, 0);
+    glVertex3v16(r, -r, 0);
+    glColor3b(200, 255, 90);
+    glVertex3v16(r, r, 0);
+    glVertex3v16(-r, r, 0);
+    glEnd();
+    glPolyFmt(POLY_ALPHA(31) | POLY_CULL_BACK | POLY_FORMAT_LIGHT0 | POLY_FOG | POLY_ID(0));
+    glPopMatrix(1);
+}
+
 void entities_render(void)
 {
     render_begin_entities();
@@ -1284,6 +1386,7 @@ void entities_render(void)
                 break;
             case ET_ARROW: render_arrow(e); break;
             case ET_TNT: render_tnt(e); break;
+            case ET_XP: render_xp(e); break;
             default: render_mob(e); break;
         }
     }

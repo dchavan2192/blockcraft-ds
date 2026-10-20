@@ -24,6 +24,7 @@
 - **Tools and armor** from wood up to diamond, with mining speeds and durability
 - **Mobs**: pigs, cows, sheep and chickens; zombies, skeletons (with bows), spiders, and the explosive *Boomshroom*
 - **A living world**: day/night cycle, flowing water and lava, falling sand and gravel, leaf decay, growing crops and saplings, fire, TNT
+- **Experience**: orbs from mobs, ores and smelting fill an XP bar and raise your level
 - **Farming, beds, doors, ladders, torches** and more
 - **Easy crafting**: a recipe list shows everything you can make; pick one and press A, no grid arranging needed
 - **Touch-screen inventory**, hotbar and menus on the bottom screen, all of which also work with the buttons

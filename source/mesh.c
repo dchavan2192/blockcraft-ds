@@ -21,7 +21,7 @@ static uint8_t loc_li[LS * LS * LS];
 #define LI(x, y, z) (((((z) + 1) * LS + ((x) + 1)) * LS) + ((y) + 1))
 #define RI(x, z) (((z) + 1) * LS + ((x) + 1))   // row (column) index, bit (y + 1)
 static uint32_t rcube[LS * LS], ropaq[LS * LS], rspec[LS * LS];
-static uint16_t fbd[256];      // per-direction face bits for interior columns (index z * 16 + x, bit y)
+DTCM_BSS static uint16_t fbd[256];      // per-direction face bits for interior columns (index z * 16 + x, bit y)
 
 #define MAX_QUADS 4096
 typedef struct {
@@ -51,7 +51,7 @@ static void mesh_build_tables(void)
 #define SCRATCH_WORDS 24000
 static uint32_t scratch[SCRATCH_WORDS];
 
-static uint32_t mask[16 * 16];
+DTCM_BSS static uint32_t mask[16 * 16];
 
 static const uint8_t face_shade[6] = { 60, 60, 50, 100, 80, 80 }; // percent
 
@@ -218,7 +218,7 @@ void mesh_mark_block(int x, int y, int z)
 // Gather
 // ---------------------------------------------------------------------------
 
-ARM_CODE static void gather(int cx, int sy, int cz)
+ITCM_CODE ARM_CODE static void gather(int cx, int sy, int cz)
 {
     int bx = cx * 16, by = sy * 16, bz = cz * 16;
     int y0 = by - 1;
@@ -288,7 +288,7 @@ static void build_vtemplate(void)
 
 #define INTERIOR_BITS 0x1FFFEu
 
-ARM_CODE static uint16_t compute_vis(bool *solid)
+ITCM_CODE ARM_CODE static uint16_t compute_vis(bool *solid)
 {
     // Fast paths: no opaque cells at all, or nothing but opaque cells
     int nop = 0;
@@ -380,9 +380,9 @@ static inline uint32_t face_light_key(int li)
 // Group quads by (dark, texture, light) with a two-pass counting sort.
 // Quads are moved through a small index permutation into qtmp.
 static uint16_t qidx_a[MAX_QUADS], qidx_b[MAX_QUADS];
-static uint16_t qcount[512];
+DTCM_BSS static uint16_t qcount[512];
 
-ARM_CODE static void sort_quads(void)
+ITCM_CODE ARM_CODE static void sort_quads(void)
 {
     int n = nquads;
     if (n < 2)
@@ -432,7 +432,7 @@ ARM_CODE static void sort_quads(void)
     }
 }
 
-ARM_CODE static void emit_texgen_quads_range(GxList *l, int dir, int first, int last)
+ITCM_CODE ARM_CODE static void emit_texgen_quads_range(GxList *l, int dir, int first, int last)
 {
     if (first >= last)
         return;
@@ -484,7 +484,7 @@ static void emit_texgen_quads(GxList *l, int dir)
 
 // Quad vertices for a face in direction d at slice plane p (raw units),
 // spanning u0..u1, v0..v1 (raw units).
-static void face_quad(uint32_t key, int d, int p, int u0, int u1, int v0, int v1)
+ITCM_CODE ARM_CODE static void face_quad(uint32_t key, int d, int p, int u0, int u1, int v0, int v1)
 {
     switch (d) {
         case FACE_U:
@@ -508,7 +508,7 @@ static void face_quad(uint32_t key, int d, int p, int u0, int u1, int v0, int v1
     }
 }
 
-ARM_CODE static void greedy_slice(int d, int s, int plane_offset_default)
+ITCM_CODE ARM_CODE static void greedy_slice(int d, int s, int plane_offset_default)
 {
     for (int v = 0; v < 16; v++) {
         for (int u = 0; u < 16; u++) {
@@ -747,7 +747,7 @@ ARM_CODE void mesh_build(int cx, int sy, int cz)
     mesh_build_count++;
 }
 
-ARM_CODE static void mesh_build_inner(int cx, int sy, int cz)
+ITCM_CODE ARM_CODE static void mesh_build_inner(int cx, int sy, int cz)
 {
     Section *sec = section_at(cx, sy, cz);
     if (!tabs_ready)
@@ -1090,7 +1090,7 @@ ARM_CODE static void mesh_build_inner(int cx, int sy, int cz)
                     case SHAPE_DOOR: {
                         int idx = id - B_DOOR;
                         int f = idx & 3, open = (idx >> 2) & 1;
-                        int side = open ? ((f + 1) & 3) : f;
+                        int side = open ? ((f + 1) & 3) : ((f + 2) & 3);   // closed: edge nearest the placer
                         int x0 = bx, x1 = bx + 16, z0 = bz, z1 = bz + 16;
                         switch (side) {
                             case 0: z1 = bz + 3; break;      // north edge

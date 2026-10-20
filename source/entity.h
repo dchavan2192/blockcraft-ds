@@ -6,7 +6,7 @@
 
 enum {
     ET_NONE = 0, ET_ITEM, ET_PIG, ET_COW, ET_SHEEP, ET_CHICKEN,
-    ET_ZOMBIE, ET_SKELETON, ET_SPIDER, ET_SHROOM, ET_ARROW, ET_TNT,
+    ET_ZOMBIE, ET_SKELETON, ET_SPIDER, ET_SHROOM, ET_ARROW, ET_TNT, ET_XP,
     ET_COUNT
 };
 
@@ -48,6 +48,8 @@ int entity_spawn(int type, int32_t x, int32_t y, int32_t z);
 void entity_spawn_item(int32_t x, int32_t y, int32_t z, const ItemStack *s);
 void entity_spawn_item_vel(int32_t x, int32_t y, int32_t z, const ItemStack *s, int32_t vx, int32_t vy, int32_t vz);
 void entities_tick(void);
+// Experience orbs worth `amount` points in total (split into a few orbs)
+void entity_spawn_xp(int32_t x, int32_t y, int32_t z, int amount);
 int entity_raycast(int32_t ex, int32_t ey, int32_t ez, int32_t dx, int32_t dy, int32_t dz, int32_t maxd, int32_t *out_t);
 void entity_damage(int idx, int dmg, int32_t kx, int32_t kz, bool by_player);
 bool entity_interact(int idx, ItemStack *held);

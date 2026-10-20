@@ -29,6 +29,8 @@ typedef struct {
     ItemStack cursor;    // item held by the stylus in menus
     ItemStack craft[4];  // 2x2 crafting grid
     int sel;
+    int xp_level;          // experience level
+    int xp_points;         // progress toward the next level
     // mining
     bool mining;
     int mine_x, mine_y, mine_z;
@@ -60,6 +62,8 @@ void player_camera(int32_t alpha); // update render camera (alpha 0..4096 interp
 ItemStack *player_held(void);
 void player_damage(int amount, int cause);
 void player_heal(int amount);
+void player_add_xp(int points);
+int xp_to_next_level(int level);
 void player_add_exhaustion(int32_t fx);
 int player_armor_points(void);
 bool player_give(int id, int count, int damage);

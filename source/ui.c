@@ -1,6 +1,7 @@
 // Bottom screen user interface (software rendered 16-bit bitmap)
 #include <stdio.h>
 #include "ui.h"
+#include "entity.h"
 #include "game.h"
 #include "player.h"
 #include "inventory.h"
@@ -448,7 +449,32 @@ static void take_craft_output(ItemStack *grid, int gw)
     sound_play(SFX_CLICK, 90, 64, 100);
 }
 
+// Experience for taking smelted items out of a furnace
+static void furnace_take_xp(int id, int n)
+{
+    if (n <= 0)
+        return;
+    int tenths = (id == I_IRON_INGOT || id == I_GOLD_INGOT) ? 7 : 2;
+    int total = n * tenths;
+    int xp = total / 10 + (rng_range(10) < total % 10 ? 1 : 0);
+    if (xp > 0)
+        entity_spawn_xp(player.body.x, player.body.y + FX(0.5), player.body.z, xp);
+}
+
+static void click_slot_inner(Widget *wd);
+
 static void click_slot(Widget *wd)
+{
+    int before = (wd->kind == SK_FURNACE_OUT && wd->stack) ? wd->stack->count : 0;
+    int id = (wd->kind == SK_FURNACE_OUT && wd->stack) ? wd->stack->id : 0;
+    click_slot_inner(wd);
+    if (wd->kind == SK_FURNACE_OUT && wd->stack) {
+        int after = stack_empty(wd->stack) ? 0 : wd->stack->count;
+        furnace_take_xp(id, before - after);
+    }
+}
+
+static void click_slot_inner(Widget *wd)
 {
     ItemStack *s = wd->stack;
     ItemStack *cur = &player.cursor;
@@ -1585,6 +1611,17 @@ void ui_frame(void)
     // live updates for furnace progress
     if (screen == UI_FURNACE && (frame_counter & 7) == 0)
         is_dirty = true;
+    // redraw the HUD hotbar as soon as its contents change (pickups, eating, tool wear)
+    if (screen == UI_HUD) {
+        static uint32_t last_sig;
+        uint32_t sig = player.sel * 2654435761u;
+        for (int i = 0; i < 9; i++)
+            sig = sig * 31 + player.inv[i].id * 977 + player.inv[i].count * 13 + player.inv[i].damage;
+        if (sig != last_sig) {
+            last_sig = sig;
+            is_dirty = true;
+        }
+    }
     if (is_dirty) {
         is_dirty = false;
         redraw();

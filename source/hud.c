@@ -72,6 +72,18 @@ void hud_update(int vblanks, bool show_debug)
         int ap = player_armor_points();
         if (ap > 0)
             row_icons(1, 21, ap, HT_ARMOR_FULL, HT_ARMOR_HALF, HT_ARMOR_EMPTY, false, 10);
+        // experience bar along the bottom with the level above it
+        int need = xp_to_next_level(player.xp_level);
+        int px = need > 0 ? player.xp_points * 240 / need : 0;
+        for (int i = 0; i < 30; i++) {
+            int f = iclamp(px - i * 8, 0, 8);
+            hud_put_tile(1 + i, 23, HT_XP0 + f, HP_GREEN);
+        }
+        if (player.xp_level > 0) {
+            char lv[8];
+            snprintf(lv, sizeof(lv), "%d", player.xp_level);
+            hud_center(22, lv, HP_GREEN);
+        }
         if (player.head_in_water || player.air < 300) {
             int bubbles = (player.air + 29) / 30;
             for (int i = 0; i < 10; i++)

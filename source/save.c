@@ -14,7 +14,7 @@
 #include "ui.h"
 
 #define SAVE_MAGIC 0x53444342u   // "BCDS"
-#define SAVE_VERSION 2
+#define SAVE_VERSION 3   // 3 adds experience; version 2 saves still load
 
 static bool fat_ok;
 static char base_dir[64];
@@ -55,7 +55,7 @@ static bool read_header(FILE *f, SaveHeader *h)
 {
     if (fread(h, sizeof(*h), 1, f) != 1)
         return false;
-    return h->magic == SAVE_MAGIC && h->version == SAVE_VERSION && (h->size == 128 || h->size == 256);
+    return h->magic == SAVE_MAGIC && (h->version == 2 || h->version == SAVE_VERSION) && (h->size == 128 || h->size == 256);
 }
 
 void save_scan_slots(void)
@@ -176,17 +176,18 @@ bool save_world_fp(FILE *f, void (*progress)(int pct))
     W(player.sel); W(player.inv); W(player.armor);
     W(player.spawn_x); W(player.spawn_y); W(player.spawn_z); W(player.has_bed_spawn); W(player.flying);
     W(player.mode);
+    W(player.xp_level); W(player.xp_points);
     // Tile entities
     W(chests); W(furnaces);
     // Entities (mobs and items only)
     uint16_t ne = 0;
     for (int i = 0; i < MAX_ENTITIES; i++)
-        if (entities[i].type != ET_NONE && entities[i].type != ET_ARROW && entities[i].type != ET_TNT && entities[i].ai != 9)
+        if (entities[i].type != ET_NONE && entities[i].type != ET_ARROW && entities[i].type != ET_TNT && entities[i].type != ET_XP && entities[i].ai != 9)
             ne++;
     W(ne);
     for (int i = 0; i < MAX_ENTITIES; i++) {
         Entity *e = &entities[i];
-        if (e->type == ET_NONE || e->type == ET_ARROW || e->type == ET_TNT || e->ai == 9)
+        if (e->type == ET_NONE || e->type == ET_ARROW || e->type == ET_TNT || e->type == ET_XP || e->ai == 9)
             continue;
         W(e->type); W(e->body.x); W(e->body.y); W(e->body.z); W(e->health); W(e->item); W(e->sheared); W(e->yaw);
     }
@@ -255,6 +256,9 @@ bool load_world_fp(FILE *f, void (*progress)(int pct))
     R(player.sel); R(player.inv); R(player.armor);
     R(player.spawn_x); R(player.spawn_y); R(player.spawn_z); R(player.has_bed_spawn); R(player.flying);
     R(player.mode);
+    if (h.version >= 3) {
+        R(player.xp_level); R(player.xp_points);
+    }
     R(chests); R(furnaces);
     entities_clear();
     uint16_t ne = 0;

@@ -27,6 +27,7 @@ enum {
     HT_CROSS_TL, HT_CROSS_TR, HT_CROSS_BL, HT_CROSS_BR,
     HT_SOLID, HT_SHADE,
     HT_HEART_HARD_FULL, HT_HEART_HARD_HALF,
+    HT_XP0, HT_XP8 = HT_XP0 + 8,   // experience bar segments with 0..8 pixels filled
     HT_COUNT
 };
 enum { HP_WHITE = 0, HP_YELLOW, HP_RED, HP_GRAY, HP_GREEN, HP_SHADOW };

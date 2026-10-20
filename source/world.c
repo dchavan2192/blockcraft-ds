@@ -150,7 +150,7 @@ static inline void mark_idx(uint32_t idx)
     }
 }
 
-ARM_CODE static void propagate_add(int ch)
+ITCM_CODE ARM_CODE static void propagate_add(int ch)
 {
     while (add_head != add_tail) {
         uint32_t idx = lq_add[add_head];
@@ -182,7 +182,7 @@ ARM_CODE static void propagate_add(int ch)
     }
 }
 
-ARM_CODE static void propagate_remove(int ch)
+ITCM_CODE ARM_CODE static void propagate_remove(int ch)
 {
     while (rem_head != rem_tail) {
         uint32_t e = lq_rem[rem_head];

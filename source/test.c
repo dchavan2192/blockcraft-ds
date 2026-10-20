@@ -63,7 +63,7 @@ static void frames(int n)
         scanKeys();
 #endif
         game_frame(1, &acc);
-#if !defined(TEST_TOUR) && !defined(TEST_CRAFT)
+#if !defined(TEST_TOUR) && !defined(TEST_CRAFT) && !defined(TEST_VIS)
         hud_print(0, 1, cur_label, HP_YELLOW);
         {
             char b[32];
@@ -83,7 +83,7 @@ static void frames(int n)
 #endif
         }
 #endif
-#if !defined(TEST_TOUR) && !defined(TEST_CRAFT)
+#if !defined(TEST_TOUR) && !defined(TEST_CRAFT) && !defined(TEST_VIS)
         ui_text_report(lp, nlines);
 #endif
         swiWaitForVBlank();
@@ -175,6 +175,36 @@ void test_run(void)
     py = world.spawn_y + 1;
     if (py > 50) py = 50;
     report("Test world seed 777, spawn %d %d %d", px, py, pz);
+#ifdef TEST_VIS
+    {
+        ui_close();
+        test_input_override = true;
+        clear_inputs();
+        flat_area(px, pz, py, 8);
+        place_player(px, py, pz + 3, 0, 15);
+        frames(30);
+        give(0, I_DOOR, 1);
+        player.sel = 0;
+        place_player(px, py, pz + 3, 0, 40);
+        frames(5);
+        input.use_tap = true;
+        frames(10);
+        place_player(px + 2, py, pz + 3, 300, 10);
+        frames(40);
+        place_player(px, py, pz + 3, 0, 15);
+        give(0, 0, 0);
+        frames(10);
+        input.use_tap = true;
+        frames(20);
+        place_player(px + 2, py, pz + 3, 300, 10);
+        frames(40);
+        entity_spawn_xp(px << 12, (py + 1) << 12, (pz - 2) << 12, 60);
+        place_player(px, py, pz + 3, 0, 25);
+        frames(6);
+        frames(200);
+        while (1) frames(1);
+    }
+#endif
 #ifdef TEST_CRAFT
     {
         ui_close();
@@ -514,7 +544,7 @@ void test_run(void)
     frames(60);
     int still = 0;
     for (int i = 0; i < 4; i++)
-        if (mn[i] >= 0 && entities[mn[i]].type == mt[i])
+        if (mn[i] >= 0 && entities[mn[i]].type == mt[i] && entities[mn[i]].age >= 80)   // ignore fresh natural spawns
             still++;
     check(still == 0, "monsters killed (%d left)", still);
     player.health = 20;
@@ -530,6 +560,47 @@ void test_run(void)
     frames(200);
     int after = count_blocks(B_AIR, px + 6, py - 2, pz + 6, 2, 1);
     check(after > before + 10, "TNT crater %d -> %d air", before, after);
+
+    // ---- T16: doors ----
+    cur_label = "T16 door";
+    place_player(px + 4, py, pz + 4, 0, 45);
+    world_set(px + 4, py, pz + 2, B_AIR);
+    world_set(px + 4, py + 1, pz + 2, B_AIR);
+    give(4, I_DOOR, 1);
+    player.sel = 4;
+    frames(5);
+    input.use_tap = true;
+    frames(6);
+    int dbot = world_get(px + 4, py, pz + 2), dtop = world_get(px + 4, py + 1, pz + 2);
+    check(is_door(dbot) && is_door(dtop) && !((dbot - B_DOOR) & 4), "door placed (%d %d)", dbot, dtop);
+    place_player(px + 4, py, pz + 4, 0, 20);
+    give(4, 0, 0);
+    frames(5);
+    input.use_tap = true;
+    frames(6);
+    dbot = world_get(px + 4, py, pz + 2);
+    dtop = world_get(px + 4, py + 1, pz + 2);
+    check(is_door(dbot) && is_door(dtop) && ((dbot - B_DOOR) & 4) && ((dtop - B_DOOR) & 4), "door opens (%d %d)", dbot, dtop);
+    input.use_tap = true;
+    frames(6);
+    dbot = world_get(px + 4, py, pz + 2);
+    check(is_door(dbot) && !((dbot - B_DOOR) & 4), "door closes (%d)", dbot);
+
+    // ---- T17: experience ----
+    cur_label = "T17 xp";
+    player.xp_level = 0;
+    player.xp_points = 0;
+    place_player(px, py, pz + 6, 0, 10);
+    world.time = 3000;
+    int zx = entity_spawn(ET_ZOMBIE, (px << 12), py << 12, ((pz + 4) << 12));
+    frames(2);
+    if (zx >= 0)
+        entity_damage(zx, 50, 0, 0, true);
+    frames(120);
+    int xp_total = player.xp_level * 100 + player.xp_points;
+    check(entities_count(ET_XP) == 0 && xp_total == 5, "zombie xp collected: L%d +%d", player.xp_level, player.xp_points);
+    player_add_xp(20);
+    check(player.xp_level == 2 && player.xp_points == 9, "leveling: L%d +%d (L2 +9)", player.xp_level, player.xp_points);
 
     // ---- T15: save round trip ----
     uint32_t sum = 0;
@@ -558,6 +629,7 @@ void test_run(void)
             sum2 = sum2 * 31 + world.blk[i];
         check(lok && sum == sum2, "load restores blocks");
         check(inv_count_item(player.inv, INV_SIZE, B_LOG_OAK) == logs, "load restores inventory");
+        check(player.xp_level == 2 && player.xp_points == 9, "load restores xp (L%d +%d)", player.xp_level, player.xp_points);
         free(buf);
         enter_world();
     }

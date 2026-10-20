@@ -24,7 +24,7 @@ int block_boxes(int bx, int by, int bz, AABB *out)
         case SHAPE_DOOR: {
             int idx = id - B_DOOR;
             int f = idx & 3, open = (idx >> 2) & 1;
-            int side = open ? ((f + 1) & 3) : f;
+            int side = open ? ((f + 1) & 3) : ((f + 2) & 3);   // closed: edge nearest the placer
             switch (side) {
                 case 0: z1 = z0 + 3 * 256; break;
                 case 1: x0 = x1 - 3 * 256; break;
