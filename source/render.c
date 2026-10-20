@@ -582,8 +582,12 @@ static void draw_sky_objects(void)
     glRotateXi(cam.pitch);
     glRotateYi(cam.yaw);
     for (int i = 0; i < 2; i++) {
+        int32_t a = -ang + (i ? ANG_FULL / 2 : 0) + ANG_FULL / 4;
+        // Below the horizon it would show through gaps where distant terrain isn't drawn
+        if (sinLerp(a) < -FX(0.12))
+            continue;
         glPushMatrix();
-        glRotateZi(-ang + (i ? ANG_FULL / 2 : 0) + ANG_FULL / 4);
+        glRotateZi(a);
         // place at distance along +X axis (east at sunrise)
         int32_t dist = (render_distance * 16) << 10; // quarter scale
         GFX_TEX_FORMAT = gx_texparam16(i ? TEX_MOON : TEX_SUN, TEXGEN_NONE);

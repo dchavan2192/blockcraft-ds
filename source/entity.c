@@ -238,15 +238,15 @@ void entity_damage(int idx, int dmg, int32_t kx, int32_t kz, bool by_player)
         return;
     e->health -= dmg;
     e->hurt = 10;
-    e->vx += fxmul(kx, FX(0.4));
-    e->vz += fxmul(kz, FX(0.4));
-    e->vy = FX(0.3);
+    e->vx += fxmul(kx, FX(0.3));
+    e->vz += fxmul(kz, FX(0.3));
+    e->vy = FX(0.25);
     int snd = mob_sound(e->type);
     sound_play_at(snd >= 0 ? snd : SFX_HIT, e->body.x, e->body.y, e->body.z, 110, 120);
     sound_play_at(SFX_HIT, e->body.x, e->body.y, e->body.z, 90, 100);
     if (!einfo[e->type].hostile) {
         e->ai = 2; // flee
-        e->timer = 60;
+        e->timer = 50;
     } else if (by_player) {
         e->ai = 1;
     }
@@ -455,11 +455,11 @@ static void passive_ai(Entity *e)
 {
     int32_t speed = einfo[e->type].speed;
     if (e->ai == 2) {
-        // flee
-        walk(e, speed * 2);
-        if (e->timer % 20 == 0)
+        // flee: a brisk trot, not a sprint, changing direction now and then
+        walk(e, speed * 13 / 10);
+        if (e->timer % 30 == 0)
             e->target_yaw = rng_range(ANG_FULL);
-        turn_toward(e, e->target_yaw, 800);
+        turn_toward(e, e->target_yaw, 500);
         if (--e->timer <= 0)
             e->ai = 0;
     } else {

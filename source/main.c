@@ -420,15 +420,18 @@ static void read_input(int vblanks)
     if (ui_tap_use)
         input.use_tap = true;
 
-    // Look
-    int speed = settings.look_speed * 22 * vblanks;
+    // Look: faster base speed, and holding a look button speeds up a little more
+    static int look_hold;
+    bool looking = (held & (KEY_A | KEY_Y | KEY_X | KEY_B)) != 0;
+    look_hold = looking ? imin(look_hold + vblanks, 24) : 0;
+    int speed = settings.look_speed * 34 * vblanks * (24 + look_hold) / 32;
     int dyaw = 0, dpitch = 0;
     if (held & KEY_A) dyaw += speed;
     if (held & KEY_Y) dyaw -= speed;
     if (held & KEY_X) dpitch -= speed;
     if (held & KEY_B) dpitch += speed;
-    dyaw += ui_look_dx * settings.look_speed * 9;
-    dpitch += ui_look_dy * settings.look_speed * 9;
+    dyaw += ui_look_dx * settings.look_speed * 13;
+    dpitch += ui_look_dy * settings.look_speed * 13;
     if (settings.invert_y)
         dpitch = -dpitch;
     player.yaw = (player.yaw + dyaw) & (ANG_FULL - 1);

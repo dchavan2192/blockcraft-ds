@@ -208,6 +208,14 @@ void test_run(void)
         world.time = 18000;
         cur_label = "night";
         frames(120);
+        place_player(px, py + 6, pz, 200, 60);
+        player.flying = true;
+        frames(80);
+        world.time = 12800;
+        frames(80);
+        world.time = 23000;
+        frames(80);
+        player.flying = false;
         // find a dark cave cell near spawn
         int found = 0, cxp = 0, cyp = 0, czp = 0;
         for (int r = 0; r < 40 && !found; r++)
