@@ -1,0 +1,41 @@
+# Builds the ROM with the official BlocksDS image and commits it to release/
+name: Build ROM
+
+on:
+  push:
+    branches: [main, villages-and-cave-rendering]
+    paths-ignore: ['release/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build game and self-test ROMs
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work skylyrac/blocksds:slim-v1.24.0 \
+            sh -c 'make -j"$(nproc)" && make -f Makefile.test -j"$(nproc)"'
+          ls -l *.nds
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: roms
+          path: '*.nds'
+
+      - name: Commit the new ROM to release/
+        run: |
+          cp blockcraft.nds release/blockcraft.nds
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add release/blockcraft.nds
+          if git diff --cached --quiet; then
+            echo "ROM unchanged"
+          else
+            git commit -m "Build release/blockcraft.nds from ${GITHUB_SHA::7}"
+            git push
+          fi
