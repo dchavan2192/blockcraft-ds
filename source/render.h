@@ -37,6 +37,8 @@ void render_begin_entities(void);
 void render_end_entities(void);
 // Relative position of a world point to the camera (wrap aware), fx
 void render_rel(int32_t wx, int32_t wy, int32_t wz, int32_t *rx, int32_t *ry, int32_t *rz);
+// False when the point's section was hidden from the camera this frame
+bool render_point_visible(int32_t x, int32_t y, int32_t z);
 
 // Hooks implemented elsewhere
 void entities_render(void);

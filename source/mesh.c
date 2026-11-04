@@ -376,6 +376,14 @@ static inline uint32_t face_light_key(int li)
 }
 #define MESH_LIGHT_KEY(l) face_light_key(l)
 #define KEY(tex, light, h) ((1u << 24) | ((uint32_t)(h) << 16) | ((uint32_t)(tex) << 8) | (light))
+// Unlit faces come out nearly black whatever their texture, so they all share
+// one texture and light key: greedy meshing then merges whole cave walls
+// across stone, dirt, gravel and ore into far fewer quads.
+static inline uint32_t face_key(int tex, int li)
+{
+    uint32_t lk = face_light_key(li);
+    return (lk & KEY_DARK) ? KEY(TEX_STONE, KEY_DARK, 0) : KEY(tex, lk, 0);
+}
 
 // Group quads by (dark, texture, light) with a two-pass counting sort.
 // Quads are moved through a small index permutation into qtmp.
@@ -869,7 +877,7 @@ ITCM_CODE ARM_CODE static void mesh_build_inner(int cx, int sy, int cz)
                             int id = loc_id[i];
                             if (loc_id[i + no] == id)
                                 continue;
-                            mask[y * 16 + z] = KEY(blocks[id].tex[d], MESH_LIGHT_KEY(loc_li[i + no]), 0);
+                            mask[y * 16 + z] = face_key(blocks[id].tex[d], loc_li[i + no]);
                             anyface = true;
                         }
                     }
@@ -887,7 +895,7 @@ ITCM_CODE ARM_CODE static void mesh_build_inner(int cx, int sy, int cz)
                             int id = loc_id[i];
                             if (loc_id[i + no] == id)
                                 continue;
-                            mask[y * 16 + x] = KEY(blocks[id].tex[d], MESH_LIGHT_KEY(loc_li[i + no]), 0);
+                            mask[y * 16 + x] = face_key(blocks[id].tex[d], loc_li[i + no]);
                             anyface = true;
                         }
                     }
@@ -905,7 +913,7 @@ ITCM_CODE ARM_CODE static void mesh_build_inner(int cx, int sy, int cz)
                         if (cube_tab[id]) {
                             if (loc_id[i + no] == id)
                                 continue;
-                            mask[c] = KEY(blocks[id].tex[d], MESH_LIGHT_KEY(loc_li[i + no]), 0);
+                            mask[c] = face_key(blocks[id].tex[d], loc_li[i + no]);
                         } else {
                             mask[c] = KEY(TEX_LAVA, loc_li[i] | 0x0F, liquid_height16(id));
                         }

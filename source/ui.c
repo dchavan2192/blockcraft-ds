@@ -10,6 +10,7 @@
 #include "worldgen.h"
 #include "sound.h"
 #include "render.h"
+#include "village.h"
 #include "assets_gen.h"
 #include "font_bin.h"
 #include "icons16_bin.h"
@@ -224,7 +225,7 @@ static void slot_box(int x, int y, int size)
 // Widgets
 // ---------------------------------------------------------------------------
 
-enum { WT_BUTTON = 1, WT_SLOT, WT_CITEM, WT_HOTBAR, WT_BOOKROW };
+enum { WT_BUTTON = 1, WT_SLOT, WT_CITEM, WT_HOTBAR, WT_BOOKROW, WT_TRADEROW };
 enum { SK_NORMAL = 0, SK_OUTPUT2, SK_OUTPUT3, SK_ARMOR, SK_FUEL, SK_FURNACE_OUT, SK_FURNACE_IN };
 
 typedef struct {
@@ -289,7 +290,8 @@ int ui_screen(void)
 
 bool ui_in_game_menu(void)
 {
-    return screen == UI_INVENTORY || screen == UI_CRAFTING || screen == UI_FURNACE || screen == UI_CHEST || screen == UI_CREATIVE;
+    return screen == UI_INVENTORY || screen == UI_CRAFTING || screen == UI_FURNACE || screen == UI_CHEST || screen == UI_CREATIVE ||
+           screen == UI_TRADE;
 }
 
 static void return_craft_items(ItemStack *grid, int n)
@@ -330,6 +332,38 @@ void ui_open_furnace(int x, int y, int z)
     furnace_x = x; furnace_y = y; furnace_z = z;
     furnace_get(x, y, z, true);
     ui_open(UI_FURNACE);
+}
+
+// Trading
+static int trade_ent = -1, trade_vil, trade_slot;
+static int trade_sel, trade_scroll;
+
+void ui_open_trade(int entity_index)
+{
+    Entity *e = &entities[entity_index];
+    if (trade_ent != entity_index || trade_vil != e->vil || trade_slot != e->vslot) {
+        trade_sel = 0;
+        trade_scroll = 0;
+    }
+    trade_ent = entity_index;
+    trade_vil = e->vil;
+    trade_slot = e->vslot;
+    ui_open(UI_TRADE);
+}
+
+int ui_trade_entity(void)
+{
+    return screen == UI_TRADE ? trade_ent : -1;
+}
+
+static VillagerRec *trade_rec(void)
+{
+    if (trade_ent < 0)
+        return NULL;
+    Entity *e = &entities[trade_ent];
+    if (e->type != ET_VILLAGER || e->vil != trade_vil || e->vslot != trade_slot || e->ai == 9)
+        return NULL;
+    return village_rec(trade_vil, trade_slot);
 }
 
 void ui_close(void)
@@ -553,6 +587,7 @@ enum {
     B_OPT_VOL_DN, B_OPT_VOL_UP, B_OPT_MUSIC, B_OPT_COORDS, B_OPT_PEACEFUL, B_OPT_SWAP, B_DONE,
     B_HUD_INV, B_HUD_PAUSE, B_HUD_SNEAK, B_HUD_DROP, B_HUD_JUMP, B_SURVIVAL_TAB, B_TRASH,
     B_HELP_NEXT, B_TAB_CRAFT, B_TAB_ITEMS, B_BOOK_UP, B_BOOK_DOWN, B_BOOK_CRAFT, B_BOOK_MAX,
+    B_TRADE_UP, B_TRADE_DOWN, B_TRADE_ONE, B_TRADE_ALL,
 };
 
 static void inventory_section(int x, int y)
@@ -899,6 +934,146 @@ static void draw_book(bool table)
 }
 
 // ---------------------------------------------------------------------------
+// Trading with villagers
+// ---------------------------------------------------------------------------
+
+#define TRADE_ROWS 6
+#define TRADE_ROW_H 27
+
+static int trade_offers(uint8_t *offers)
+{
+    VillagerRec *r = trade_rec();
+    return r ? villager_offers(r, offers) : 0;
+}
+
+static void trade_select(int i)
+{
+    uint8_t offers[TRADES_PER_PROF];
+    int n = trade_offers(offers);
+    if (!n)
+        return;
+    trade_sel = iclamp(i, 0, n - 1);
+    if (trade_sel < trade_scroll)
+        trade_scroll = trade_sel;
+    if (trade_sel >= trade_scroll + TRADE_ROWS)
+        trade_scroll = trade_sel - TRADE_ROWS + 1;
+    is_dirty = true;
+}
+
+static void trade_do(bool all)
+{
+    VillagerRec *r = trade_rec();
+    uint8_t offers[TRADES_PER_PROF];
+    int n = trade_offers(offers);
+    if (!r || !n)
+        return;
+    int t = offers[iclamp(trade_sel, 0, n - 1)];
+    int done = villager_do_trade(r, t, all ? 64 : 1);
+    Entity *e = &entities[trade_ent];
+    if (done > 0) {
+        sound_play_at(SFX_VILLAGER_YES, e->body.x, e->body.y, e->body.z, 110, 100 + rng_range(20));
+        sound_play(SFX_POP, 80, 64, 110);
+    } else {
+        sound_play_at(SFX_VILLAGER_NO, e->body.x, e->body.y, e->body.z, 100, 100);
+    }
+    is_dirty = true;
+}
+
+static void draw_trade(void)
+{
+    tex_tile_bg(TEX_PLANKS_SPRUCE, 2, 5);
+    button(214, 2, 40, 16, B_CLOSE, "Done", true);
+    VillagerRec *r = trade_rec();
+    if (!r) {
+        text(8, 6, "The villager left", COL_WHITE);
+        return;
+    }
+    char buf[48];
+    text(4, 1, villager_name(r), COL_WHITE);
+    // level and progress toward the next one
+    text(4, 10, villager_level_name(r->level), COL_YELLOW);
+    if (r->level < VILLAGER_MAX_LEVEL) {
+        int lo = villager_xp_for_level(r->level - 1), hi = villager_xp_for_level(r->level);
+        int fillw = iclamp((r->xp - lo) * 80 / imax(1, hi - lo), 0, 80);
+        fill(124, 12, 82, 5, COL_BLACK);
+        fill(125, 13, fillw, 3, COL_GREEN);
+    }
+
+    uint8_t offers[TRADES_PER_PROF];
+    int n = villager_offers(r, offers);
+    trade_sel = iclamp(trade_sel, 0, imax(0, n - 1));
+    trade_scroll = iclamp(trade_scroll, 0, imax(0, n - TRADE_ROWS));
+
+    panel(2, 20, 164, 170);
+    for (int row = 0; row < TRADE_ROWS; row++) {
+        int i = trade_scroll + row;
+        if (i >= n)
+            break;
+        int t = offers[i];
+        const Trade *d = villager_trade_def(r, t);
+        int times = villager_trade_times(r, t);
+        bool sold_out = r->uses[t] >= d->max_uses;
+        int y = 23 + row * TRADE_ROW_H;
+        add_widget(WT_TRADEROW, 5, y, 132, TRADE_ROW_H - 1, i);
+        bool selected = i == trade_sel;
+        fill(5, y, 132, TRADE_ROW_H - 1, selected ? C(10, 14, 24) : (times > 0 ? C(20, 22, 20) : C(19, 19, 19)));
+        if (selected) {
+            fill(5, y, 132, 1, COL_YELLOW);
+            fill(5, y + TRADE_ROW_H - 2, 132, 1, COL_YELLOW);
+        }
+        ItemStack a = { .id = d->buy, .count = d->buy_n };
+        slot_box(8, y + 4, 18);
+        draw_stack(9, y + 5, &a, 1);
+        if (d->buy2) {
+            ItemStack b = { .id = d->buy2, .count = d->buy2_n };
+            slot_box(28, y + 4, 18);
+            draw_stack(29, y + 5, &b, 1);
+        }
+        arrow_icon(50, y + 5, sold_out ? 0 : times > 0 ? 22 : 10);
+        ItemStack out = { .id = d->sell, .count = d->sell_n };
+        slot_box(76, y + 4, 18);
+        draw_stack(77, y + 5, &out, 1);
+        if (sold_out)
+            text_ex(100, y + 9, "Out", selected ? C(31, 16, 16) : C(20, 4, 4), false, 1);
+        else if (times > 0) {
+            snprintf(buf, sizeof(buf), "x%d", (int)imin(times, 99));
+            text_ex(100, y + 9, buf, selected ? C(16, 31, 16) : C(3, 14, 3), false, 1);
+        }
+    }
+    if (!n)
+        text(12, 60, "Nothing to trade", COL_TEXT);
+    button(140, 23, 24, 78, B_TRADE_UP, "^", trade_scroll > 0);
+    button(140, 103, 24, 78, B_TRADE_DOWN, "v", trade_scroll + TRADE_ROWS < n);
+
+    panel(168, 20, 86, 170);
+    if (n) {
+        int t = offers[trade_sel];
+        const Trade *d = villager_trade_def(r, t);
+        ItemStack out = { .id = d->sell, .count = d->sell_n };
+        slot_box(194, 24, 36);
+        draw_stack(196, 26, &out, 2);
+        book_wrap_name(211, 63, item_valid(d->sell) ? items[d->sell].name : "?", COL_TEXT);
+        text_ex(172, 83, "Costs", C(12, 12, 12), false, 1);
+        for (int k = 0; k < 2; k++) {
+            int id = k ? d->buy2 : d->buy, need = k ? d->buy2_n : d->buy_n;
+            if (!id)
+                continue;
+            int y = 93 + k * 18;
+            ItemStack ing = { .id = id, .count = 1 };
+            draw_stack(172, y, &ing, 1);
+            int have = inv_count_item(player.inv, INV_SIZE, id);
+            snprintf(buf, sizeof(buf), "%d/%d", (int)imin(have, 999), need);
+            text_ex(192, y + 4, buf, have >= need ? C(3, 15, 3) : C(20, 4, 4), false, 1);
+        }
+        snprintf(buf, sizeof(buf), "Stock %d/%d", d->max_uses - r->uses[t], d->max_uses);
+        text_ex(172, 130, buf, C(12, 12, 12), false, 1);
+        int times = villager_trade_times(r, t);
+        button(171, 142, 80, 22, B_TRADE_ONE, "A: Trade", times > 0);
+        button(171, 166, 80, 22, B_TRADE_ALL, "X: Trade all", times > 1);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Keypad control of slot screens
 // ---------------------------------------------------------------------------
 
@@ -988,7 +1163,8 @@ static void build_creative_list(void)
         B_GRASS, B_DIRT, B_STONE, B_COBBLESTONE, B_MOSSY_COBBLESTONE, B_STONEBRICKS, B_BRICKS, B_SANDSTONE, B_SAND,
         B_GRAVEL, B_CLAY, B_SNOW, B_ICE, B_OBSIDIAN, B_BEDROCK, B_PLANKS_OAK, B_PLANKS_BIRCH, B_PLANKS_SPRUCE,
         B_LOG_OAK, B_LOG_BIRCH, B_LOG_SPRUCE, B_LEAVES_OAK, B_LEAVES_BIRCH, B_LEAVES_SPRUCE, B_GLASS, B_BOOKSHELF,
-        B_COAL_ORE, B_IRON_ORE, B_GOLD_ORE, B_REDSTONE_ORE, B_DIAMOND_ORE, B_COAL_BLOCK, B_IRON_BLOCK, B_GOLD_BLOCK, B_DIAMOND_BLOCK,
+        B_COAL_ORE, B_IRON_ORE, B_GOLD_ORE, B_REDSTONE_ORE, B_DIAMOND_ORE, B_EMERALD_ORE, B_COAL_BLOCK, B_IRON_BLOCK, B_GOLD_BLOCK,
+        B_DIAMOND_BLOCK, B_EMERALD_BLOCK, B_PATH,
         B_WOOL_WHITE, B_WOOL_WHITE + 1, B_WOOL_WHITE + 2, B_WOOL_WHITE + 3, B_WOOL_WHITE + 4, B_WOOL_WHITE + 5,
         B_WOOL_WHITE + 6, B_WOOL_WHITE + 7, B_WOOL_WHITE + 8, B_WOOL_WHITE + 9, B_WOOL_WHITE + 10, B_WOOL_WHITE + 11,
         B_WOOL_WHITE + 12, B_WOOL_WHITE + 13, B_WOOL_WHITE + 14, B_WOOL_WHITE + 15,
@@ -1230,6 +1406,7 @@ static const char *help_pages[][12] = {
         "SELECT: tap = next item, hold = sneak",
         "START: pause menu",
         "Touch the hotbar to pick an item.",
+        "Tap a villager to trade emeralds.",
         NULL,
     },
     {
@@ -1298,6 +1475,7 @@ static void redraw(void)
         case UI_LOADING: draw_loading(); break;
         case UI_CONFIRM_DELETE: draw_confirm_delete(); break;
         case UI_SLEEP: draw_sleep(); break;
+        case UI_TRADE: draw_trade(); break;
     }
     draw_key_cursor();
     DC_FlushRange(fb, sizeof(fb));
@@ -1375,6 +1553,10 @@ static void on_button(int id)
             break;
         case B_BOOK_CRAFT: book_craft(false); break;
         case B_BOOK_MAX: book_craft(true); break;
+        case B_TRADE_UP: trade_scroll = imax(0, trade_scroll - TRADE_ROWS); trade_select(imin(trade_sel, trade_scroll + TRADE_ROWS - 1)); break;
+        case B_TRADE_DOWN: trade_scroll += TRADE_ROWS; trade_select(imax(trade_sel, trade_scroll)); break;
+        case B_TRADE_ONE: trade_do(false); break;
+        case B_TRADE_ALL: trade_do(true); break;
         case B_SLOT0: case B_SLOT1: case B_SLOT2:
             menu_slot = id - B_SLOT0;
             if (slot_info[menu_slot].exists) {
@@ -1474,6 +1656,15 @@ static void handle_widget_tap(int wi)
             }
             is_dirty = true;
             break;
+        case WT_TRADEROW:
+            if (wd->id == trade_sel)
+                trade_do(false);        // tap the selected row again to trade
+            else {
+                trade_select(wd->id);
+                sound_play(SFX_CLICK, 50, 64, 140);
+            }
+            is_dirty = true;
+            break;
         case WT_HOTBAR:
             player.sel = wd->id;
             sound_play(SFX_CLICK, 50, 64, 140);
@@ -1493,6 +1684,13 @@ static void ui_menu_keys(void)
     }
     if (down & KEY_B) {
         ui_close();
+        return;
+    }
+    if (screen == UI_TRADE) {
+        if (rep & KEY_UP) trade_select(trade_sel - 1);
+        if (rep & KEY_DOWN) trade_select(trade_sel + 1);
+        if (rep & KEY_A) trade_do(false);
+        if (down & KEY_X) trade_do(true);
         return;
     }
     bool tabs = screen == UI_INVENTORY || screen == UI_CRAFTING;
@@ -1611,6 +1809,17 @@ void ui_frame(void)
     // live updates for furnace progress
     if (screen == UI_FURNACE && (frame_counter & 7) == 0)
         is_dirty = true;
+    // the villager walked off, died, or the player wandered away
+    if (screen == UI_TRADE) {
+        Entity *e = trade_ent >= 0 ? &entities[trade_ent] : NULL;
+        bool gone = !trade_rec();
+        if (!gone) {
+            int32_t dx = world_wrap_delta_fx(e->body.x - player.body.x), dz = world_wrap_delta_fx(e->body.z - player.body.z);
+            gone = iabs(dx) > FX(7) || iabs(dz) > FX(7) || player.dead;
+        }
+        if (gone)
+            ui_close();
+    }
     // redraw the HUD hotbar as soon as its contents change (pickups, eating, tool wear)
     if (screen == UI_HUD) {
         static uint32_t last_sig;

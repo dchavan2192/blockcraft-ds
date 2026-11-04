@@ -13,6 +13,8 @@
 #include "game.h"
 #include "worldgen.h"
 #include "assets_gen.h"
+#include "village.h"
+#include "ui.h"
 
 Entity entities[MAX_ENTITIES];
 
@@ -37,6 +39,8 @@ static const EntityInfo einfo[ET_COUNT] = {
     [ET_ARROW] = { "Arrow", 1, 2, 1, 0, 0 },
     [ET_TNT] = { "TNT", 8, 16, 1, 0, 0 },
     [ET_XP] = { "Experience", 1, 2, 1, 0, 0 },
+    [ET_VILLAGER] = { "Villager", 4, 32, 20, 230, 0 },
+    [ET_GOLEM] = { "Iron Golem", 11, 43, 100, 210, 0 },
 };
 
 const char *entity_name(int type)
@@ -48,6 +52,7 @@ void entities_clear(void)
 {
     memset(entities, 0, sizeof(entities));
     particles_clear();
+    villages_unloaded();
 }
 
 int entities_count(int type)
@@ -161,6 +166,9 @@ static int yaw_toward(int32_t dx, int32_t dz)
     return (ANG_FULL - a) & (ANG_FULL - 1);
 }
 
+static int fdx_of(int f) { static const int8_t d[4] = { 0, 1, 0, -1 }; return d[f & 3]; }
+static int fdz_of(int f) { static const int8_t d[4] = { -1, 0, 1, 0 }; return d[f & 3]; }
+
 static int light_at(Entity *e)
 {
     int l = world_light_raw(e->body.x >> 12, (e->body.y + 1024) >> 12, e->body.z >> 12);
@@ -207,6 +215,10 @@ static void drop_loot(Entity *e)
             s.id = I_STRING; s.count = rng_range(3); break;
         case ET_SHROOM:
             s.id = I_GUNPOWDER; s.count = rng_range(3); break;
+        case ET_GOLEM:
+            s.id = B_FLOWER_RED; s.count = 1;
+            entity_spawn_item(x, y, z, &s);
+            s.id = I_IRON_INGOT; s.count = 3 + rng_range(3); break;
         default:
             break;
     }
@@ -224,6 +236,7 @@ static int mob_sound(int type)
         case ET_ZOMBIE: return SFX_ZOMBIE;
         case ET_SKELETON: return SFX_SKELETON;
         case ET_SPIDER: return SFX_SPIDER;
+        case ET_VILLAGER: return SFX_VILLAGER_NO;
         default: return -1;
     }
 }
@@ -239,13 +252,22 @@ void entity_damage(int idx, int dmg, int32_t kx, int32_t kz, bool by_player)
         return;
     e->health -= dmg;
     e->hurt = 10;
-    e->vx += fxmul(kx, FX(0.3));
-    e->vz += fxmul(kz, FX(0.3));
-    e->vy = FX(0.25);
+    if (e->type != ET_GOLEM) {     // too heavy to knock back
+        e->vx += fxmul(kx, FX(0.3));
+        e->vz += fxmul(kz, FX(0.3));
+        e->vy = FX(0.25);
+    }
     int snd = mob_sound(e->type);
     sound_play_at(snd >= 0 ? snd : SFX_HIT, e->body.x, e->body.y, e->body.z, 110, 120);
     sound_play_at(SFX_HIT, e->body.x, e->body.y, e->body.z, 90, 100);
-    if (!einfo[e->type].hostile) {
+    if (e->type == ET_GOLEM) {
+        if (by_player) {
+            e->ai = 1;      // angry at the player
+            e->timer = 600;
+        }
+    } else if (!einfo[e->type].hostile) {
+        if (e->type == ET_VILLAGER && by_player)
+            village_anger_golems(e->vil);
         e->ai = 2; // flee
         e->timer = 50;
     } else if (by_player) {
@@ -263,6 +285,24 @@ void entity_damage(int idx, int dmg, int32_t kx, int32_t kz, bool by_player)
 bool entity_interact(int idx, ItemStack *held)
 {
     Entity *e = &entities[idx];
+    if (e->type == ET_VILLAGER) {
+        if (e->ai == 9)
+            return false;
+        VillagerRec *r = village_rec(e->vil, e->vslot);
+        if (!r)
+            return false;
+        sound_play_at(e->ai == 6 ? SFX_VILLAGER_NO : SFX_VILLAGER, e->body.x, e->body.y, e->body.z, 100, 100 + rng_range(20));
+        if (e->ai == 6) {
+            game_message("Zzz... come back in the morning", 60);
+            return true;
+        }
+        if (e->ai == 2) {
+            game_message("The villager is too scared to trade", 60);
+            return true;
+        }
+        ui_open_trade(idx);
+        return true;
+    }
     if (e->type == ET_SHEEP && held->id == I_SHEARS && !e->sheared) {
         e->sheared = 1;
         ItemStack s = { .id = B_WOOL_WHITE, .count = 1 + rng_range(3) };
@@ -494,6 +534,8 @@ static void passive_ai(Entity *e)
     }
 }
 
+static bool zombie_hunt_villager(Entity *e);
+
 static void hostile_ai(Entity *e, int idx)
 {
     int32_t speed = einfo[e->type].speed;
@@ -524,6 +566,8 @@ static void hostile_ai(Entity *e, int idx)
         e->head_pitch = 12 + rng_range(16);
     if (!chasing)
         e->head_pitch = 0;
+    if (!chasing && e->type == ET_ZOMBIE && zombie_hunt_villager(e))
+        return;
     if (!chasing) {
         passive_ai(e);
         if (e->type == ET_SHROOM && e->fuse > 0)
@@ -607,6 +651,491 @@ static void hostile_ai(Entity *e, int idx)
     if ((e->body.hit_x || e->body.hit_z) && e->on_ground && e->type != ET_SPIDER)
         e->vy = FX(0.42);
     (void)idx;
+}
+
+// ---------------------------------------------------------------------------
+// Villagers and iron golems
+// ---------------------------------------------------------------------------
+
+static bool village_night(void)
+{
+    return world.time >= 12500 && world.time < 23300;
+}
+
+// False when a step forward would go over a drop of more than two blocks, or
+// into water or lava: villagers and patrolling golems keep out of caves
+static bool safe_ahead(const Entity *e)
+{
+    int32_t s = sinLerp(e->yaw), c = cosLerp(e->yaw);
+    int32_t reach = e->body.hw + FX(0.5);
+    int fx = (e->body.x + fxmul(s, reach)) >> 12, fz = (e->body.z - fxmul(c, reach)) >> 12;
+    int fy = (e->body.y + 512) >> 12;
+    for (int dy = 0; dy >= -3; dy--) {
+        int id = world_get(fx, fy + dy, fz);
+        if (block_liquid(id))
+            return false;
+        if (block_solid(id))
+            return true;
+    }
+    return false;
+}
+
+// Hop up a one block step when walking into it (never blindly: a jump with
+// momentum can carry a villager over the edge of a hole)
+static void step_jump(Entity *e)
+{
+    if (!(e->body.hit_x || e->body.hit_z) || !e->on_ground)
+        return;
+    int32_t s = sinLerp(e->yaw), c = cosLerp(e->yaw);
+    int32_t reach = e->body.hw + FX(0.5);
+    int fx = (e->body.x + fxmul(s, reach)) >> 12, fz = (e->body.z - fxmul(c, reach)) >> 12;
+    int fy = (e->body.y + 512) >> 12;
+    if (block_solid(world_get(fx, fy, fz)) && !block_solid(world_get(fx, fy + 1, fz)) && !block_solid(world_get(fx, fy + 2, fz)))
+        e->vy = FX(0.42);
+}
+
+static bool ground_below(int x, int y, int z)
+{
+    for (int dy = 0; dy >= -3; dy--) {
+        int id = world_get(x, y + dy, z);
+        if (block_liquid(id))
+            return false;
+        if (block_solid(id))
+            return true;
+    }
+    return false;
+}
+
+// Cancel any part of this tick's movement that would carry the body over a drop
+static void edge_guard(Entity *e)
+{
+    if (!e->on_ground)
+        return;
+    int fy = (e->body.y + 512) >> 12;
+    int32_t m = e->body.hw;
+    int32_t ax = e->vx * 3 + (e->vx > 0 ? m : e->vx < 0 ? -m : 0);
+    int32_t az = e->vz * 3 + (e->vz > 0 ? m : e->vz < 0 ? -m : 0);
+    if (e->vx && !ground_below((e->body.x + ax) >> 12, fy, e->body.z >> 12))
+        e->vx = 0;
+    if (e->vz && !ground_below(e->body.x >> 12, fy, (e->body.z + az) >> 12))
+        e->vz = 0;
+}
+
+static void reset_goal(Entity *e)
+{
+    e->best_d = 0x7FFFFFFF;
+    e->stuck = 0;
+}
+
+// Head for the center of block (bx, bz). Returns the remaining distance (fx).
+static int32_t steer_to(Entity *e, int bx, int bz, int32_t speed)
+{
+    int32_t dx = world_wrap_delta_fx(((bx << 12) + 2048) - e->body.x);
+    int32_t dz = world_wrap_delta_fx(((bz << 12) + 2048) - e->body.z);
+    int32_t d = dist_xz(0, 0, dx, dz);
+    if (d > FX(0.2)) {
+        turn_toward(e, yaw_toward(dx, dz), 900);
+        if (e->on_ground && safe_ahead(e))
+            walk(e, d < FX(1.2) ? speed / 2 : speed);
+    }
+    // progress tracking for getting unstuck
+    if (d < e->best_d - FX(0.1)) {
+        e->best_d = d;
+        e->stuck = 0;
+    } else {
+        e->stuck++;
+    }
+    return d;
+}
+
+static void place_at(Entity *e, int bx, int by, int bz)
+{
+    e->body.x = world_wrap_fx((bx << 12) + 2048);
+    e->body.y = by << 12;
+    e->body.z = world_wrap_fx((bz << 12) + 2048);
+    e->vx = e->vy = e->vz = 0;
+    reset_goal(e);
+}
+
+// Open closed doors in the way, and shut them again once through
+static void villager_doors(Entity *e)
+{
+    int32_t s = sinLerp(e->yaw), c = cosLerp(e->yaw);
+    int fx = (e->body.x + fxmul(s, FX(0.7))) >> 12, fz = (e->body.z - fxmul(c, FX(0.7))) >> 12;
+    int fy = (e->body.y + 1024) >> 12;
+    bool moving = iabs(e->vx) + iabs(e->vz) > 60 || e->body.hit_x || e->body.hit_z;
+    if (moving && is_door(world_get(fx, fy, fz)) && !village_door_is_open(fx, fy, fz)) {
+        village_door_set(fx, fy, fz, true);
+        e->door_x = fx & world.mask;
+        e->door_z = fz & world.mask;
+        e->door_y = fy + 1;
+    }
+    if (e->door_y) {
+        int dy = e->door_y - 1;
+        int32_t ddx = world_wrap_delta_fx(((e->door_x << 12) + 2048) - e->body.x);
+        int32_t ddz = world_wrap_delta_fx(((e->door_z << 12) + 2048) - e->body.z);
+        int32_t pdx = world_wrap_delta_fx(((e->door_x << 12) + 2048) - player.body.x);
+        int32_t pdz = world_wrap_delta_fx(((e->door_z << 12) + 2048) - player.body.z);
+        bool player_in = iabs(pdx) < FX(1) && iabs(pdz) < FX(1);
+        if (dist_xz(0, 0, ddx, ddz) > FX(1.8) && !player_in) {
+            village_door_set(e->door_x, dy, e->door_z, false);
+            e->door_y = 0;
+        }
+    }
+}
+
+// Teleport past a waypoint when hopelessly stuck, preferably while unseen
+static bool unstick(Entity *e, int bx, int by, int bz)
+{
+    if (e->stuck == 40 || e->stuck == 80) {
+        if (e->on_ground)
+            e->vy = FX(0.42);
+        e->yaw = (e->yaw + ANG_FULL / 4 + rng_range(ANG_FULL / 2)) & (ANG_FULL - 1);
+        walk(e, FX(0.1));
+    }
+    bool seen = render_point_visible(e->body.x, e->body.y + FX(1), e->body.z);
+    if ((e->stuck > 120 && !seen) || e->stuck > 600) {
+        place_at(e, bx, by, bz);
+        return true;
+    }
+    return false;
+}
+
+static int nearest_entity(const Entity *e, int lo, int hi, int32_t range)
+{
+    int best = -1;
+    int32_t bd = range;
+    for (int j = 0; j < MAX_ENTITIES; j++) {
+        const Entity *o = &entities[j];
+        if (o->type < lo || o->type > hi || o->ai == 9 || o == e)
+            continue;
+        int32_t d = dist_xz(e->body.x, e->body.z, o->body.x, o->body.z) + iabs(o->body.y - e->body.y) / 2;
+        if (d < bd) {
+            bd = d;
+            best = j;
+        }
+    }
+    return best;
+}
+
+// Zombies pick on villagers when the player isn't around
+static bool zombie_hunt_villager(Entity *e)
+{
+    if ((e->age & 15) == 0) {
+        int v = nearest_entity(e, ET_VILLAGER, ET_VILLAGER, FX(12));
+        e->target = v >= 0 ? v + 1 : 0;
+    }
+    if (!e->target)
+        return false;
+    Entity *v = &entities[e->target - 1];
+    if (v->type != ET_VILLAGER || v->ai == 9) {
+        e->target = 0;
+        return false;
+    }
+    int32_t dx = world_wrap_delta_fx(v->body.x - e->body.x), dz = world_wrap_delta_fx(v->body.z - e->body.z);
+    turn_toward(e, yaw_toward(dx, dz), 450);
+    walk(e, einfo[e->type].speed);
+    if (dist_xz(0, 0, dx, dz) < FX(1.3) && iabs(v->body.y - e->body.y) < FX(2) && e->attack_cd == 0) {
+        entity_damage(e->target - 1, 3, dx, dz, false);
+        e->attack_cd = 30;
+        if (v->ai == 9 && rng_range(2) == 0) {
+            // the villager doesn't stay down...
+            entity_spawn(ET_ZOMBIE, v->body.x, v->body.y, v->body.z);
+        }
+    }
+    if ((e->body.hit_x || e->body.hit_z) && e->on_ground)
+        e->vy = FX(0.42);
+    return true;
+}
+
+static void villager_sleep_pose(Entity *e, const VillagerRec *r)
+{
+    // lie along the bed: feet at the foot end, head on the pillow
+    int bf = 0;
+    int id = world_get(r->bed_x, r->bed_y, r->bed_z);
+    if (is_bed(id))
+        bf = (id - B_BED) & 3;
+    static const int8_t bdx[4] = { 0, 1, 0, -1 }, bdz[4] = { -1, 0, 1, 0 };
+    int32_t hx = (r->bed_x << 12) + 2048, hz = (r->bed_z << 12) + 2048;
+    e->body.x = world_wrap_fx(hx - bdx[bf] * FX(1.5));
+    e->body.z = world_wrap_fx(hz - bdz[bf] * FX(1.5));
+    e->body.y = (r->bed_y << 12) + FX(0.94);
+    e->yaw = ((bf + 1) & 3) * (ANG_FULL / 4);
+    e->vx = e->vy = e->vz = 0;
+}
+
+static void villager_ai(Entity *e, int idx)
+{
+    VillagerRec *r = village_rec(e->vil, e->vslot);
+    Village *v = village_get(e->vil);
+    if (!r || !v) {
+        passive_ai(e);
+        mob_physics(e, false);
+        walk_anim(e);
+        return;
+    }
+    int32_t speed = einfo[ET_VILLAGER].speed;
+    bool night = village_night();
+
+    // asleep in bed until morning
+    if (e->ai == 6) {
+        if (!night || !is_bed(world_get(r->bed_x, r->bed_y, r->bed_z))) {
+            place_at(e, r->stand_x, r->stand_y, r->stand_z);
+            e->ai = 7;          // leaving the house
+            e->stage = 0;
+        } else {
+            villager_sleep_pose(e, r);
+            e->walk_amt = 0;
+            return;             // no physics while lying down
+        }
+    }
+
+    // standing still while the player trades
+    if (ui_screen() == UI_TRADE && ui_trade_entity() == idx) {
+        int32_t dx = world_wrap_delta_fx(player.body.x - e->body.x), dz = world_wrap_delta_fx(player.body.z - e->body.z);
+        turn_toward(e, yaw_toward(dx, dz), 800);
+        mob_physics(e, false);
+        walk_anim(e);
+        return;
+    }
+
+    // run from monsters
+    if ((e->age % 10) == (idx % 10) && e->ai != 2) {
+        int m = nearest_entity(e, ET_ZOMBIE, ET_SHROOM, FX(8));
+        if (m >= 0) {
+            Entity *o = &entities[m];
+            int32_t dx = world_wrap_delta_fx(e->body.x - o->body.x), dz = world_wrap_delta_fx(e->body.z - o->body.z);
+            e->target_yaw = yaw_toward(dx, dz);
+            e->ai = 2;
+            e->timer = 50;
+            if (rng_range(3) == 0)
+                sound_play_at(SFX_VILLAGER_NO, e->body.x, e->body.y, e->body.z, 90, 120);
+        }
+    }
+    if (e->ai == 2) {
+        turn_toward(e, e->target_yaw, 700);
+        if (e->on_ground && safe_ahead(e))
+            walk(e, speed * 3 / 2);
+        else
+            e->target_yaw = (e->target_yaw + ANG_FULL / 4 + rng_range(ANG_FULL / 2)) & (ANG_FULL - 1);
+        if (--e->timer <= 0) {
+            e->ai = 0;
+            e->timer = 10;
+            reset_goal(e);
+        }
+    } else if (night && e->ai != 7) {
+        // home time: outside the door, through it, then to bed
+        if (e->ai != 5) {
+            e->ai = 5;
+            e->stage = 0;
+            reset_goal(e);
+        }
+        int ox = r->door_x + fdx_of(r->door_f) * 2, oz = r->door_z + fdz_of(r->door_f) * 2;
+        int gx, gz, gy;
+        if (e->stage == 0) { gx = ox; gz = oz; gy = r->door_y; }
+        else if (e->stage == 1) { gx = r->door_x; gz = r->door_z; gy = r->door_y; }
+        else { gx = r->stand_x; gz = r->stand_z; gy = r->stand_y; }
+        int32_t d = steer_to(e, gx, gz, speed);
+        if (d < FX(0.6) || unstick(e, gx, gy, gz)) {
+            if (e->stage < 2) {
+                e->stage++;
+                reset_goal(e);
+            } else if (is_bed(world_get(r->bed_x, r->bed_y, r->bed_z))) {
+                e->ai = 6;
+                villager_sleep_pose(e, r);
+                if (e->door_y) {
+                    village_door_set(e->door_x, e->door_y - 1, e->door_z, false);
+                    e->door_y = 0;
+                }
+                return;
+            } else {
+                e->ai = 0;      // no bed any more: just stay inside
+                e->timer = 200;
+            }
+        }
+    } else if (e->ai == 7) {
+        // morning: back out through the door
+        int gx = e->stage == 0 ? r->door_x : r->door_x + fdx_of(r->door_f) * 2;
+        int gz = e->stage == 0 ? r->door_z : r->door_z + fdz_of(r->door_f) * 2;
+        int32_t d = steer_to(e, gx, gz, speed);
+        if (d < FX(0.6) || unstick(e, gx, r->door_y, gz)) {
+            if (++e->stage >= 2) {
+                e->ai = 0;
+                e->timer = 20;
+            }
+            reset_goal(e);
+        }
+    } else {
+        // daytime: wander the village, visit the job site, chat with the player
+        if (e->ai == 5) {
+            e->ai = 0;           // night ended on the way home
+            e->timer = 10;
+        }
+        int32_t pdx = world_wrap_delta_fx(player.body.x - e->body.x), pdz = world_wrap_delta_fx(player.body.z - e->body.z);
+        bool player_near = !player.dead && dist_xz(0, 0, pdx, pdz) < FX(3.5);
+        if (--e->timer <= 0) {
+            int roll = rng_range(10);
+            if (roll < 4) {
+                e->ai = 3;
+                e->timer = 40 + rng_range(60);
+                int32_t cdx = world_wrap_delta_fx(((v->x << 12) + 2048) - e->body.x);
+                int32_t cdz = world_wrap_delta_fx(((v->z << 12) + 2048) - e->body.z);
+                // stray too far and they head back toward the well
+                e->target_yaw = dist_xz(0, 0, cdx, cdz) > FX(18) ? yaw_toward(cdx, cdz) : rng_range(ANG_FULL);
+            } else if (roll < 7) {
+                e->ai = 4;
+                e->timer = 200 + rng_range(200);
+                reset_goal(e);
+            } else {
+                e->ai = 0;
+                e->timer = 40 + rng_range(80);
+            }
+            if (rng_range(5) == 0)
+                sound_play_at(SFX_VILLAGER, e->body.x, e->body.y, e->body.z, 70, 90 + rng_range(30));
+        }
+        if (player_near && e->ai != 4) {
+            turn_toward(e, yaw_toward(pdx, pdz), 500);
+        } else if (e->ai == 3) {
+            turn_toward(e, e->target_yaw, 300);
+            if (e->on_ground && safe_ahead(e))
+                walk(e, speed);
+            else if (e->on_ground)
+                e->target_yaw = (e->yaw + ANG_FULL / 2) & (ANG_FULL - 1);   // turn back from the edge
+        } else if (e->ai == 4) {
+            int wx = r->work_x, wz = r->work_z;
+            if (r->prof == PROF_FARMER) {
+                // move between spots across the field
+                int k = e->age / 120 + idx * 7;
+                wx += (k * 5) % 7 - 3;
+                wz += (k * 3) % 5 - 2;
+            }
+            int32_t d = steer_to(e, wx, wz, speed);
+            if (r->prof == PROF_FARMER && d < FX(5) && (e->age & 15) == 0) {
+                // tend the field: harvest ripe wheat and plant it again
+                int bx = e->body.x >> 12, by = (e->body.y >> 12), bz = e->body.z >> 12;
+                for (int dz = -1; dz <= 1; dz++)
+                    for (int dx = -1; dx <= 1; dx++)
+                        for (int dy = -1; dy <= 0; dy++)
+                            if (world_get(bx + dx, by + dy, bz + dz) == B_WHEAT_LAST) {
+                                world_set(bx + dx, by + dy, bz + dz, B_WHEAT);
+                                particles_block(bx + dx, by + dy, bz + dz, B_WHEAT_LAST);
+                                sound_play_at(SFX_DIG_GRASS, e->body.x, e->body.y, e->body.z, 70, 110);
+                            }
+                if (d < FX(1.5))
+                    e->best_d = 0x7FFFFFFF;
+            }
+            if (d > FX(2.5) && e->stuck > 100) {
+                e->ai = 3;      // can't get there: wander instead
+                e->timer = 60;
+            }
+        }
+    }
+    step_jump(e);
+    villager_doors(e);
+    if (e->ai == 6)
+        return;
+    if (e->ai != 2 || e->hurt == 0)
+        edge_guard(e);
+    mob_physics(e, false);
+    walk_anim(e);
+}
+
+void village_anger_golems(int vil)
+{
+    for (int i = 0; i < MAX_ENTITIES; i++) {
+        Entity *g = &entities[i];
+        if (g->type == ET_GOLEM && g->vil == vil && g->ai != 9) {
+            g->ai = 1;
+            g->timer = 600;
+        }
+    }
+}
+
+static void golem_ai(Entity *e)
+{
+    Village *v = village_get(e->vil);
+    int32_t speed = einfo[ET_GOLEM].speed;
+    if (e->stage > 0)
+        e->stage--;
+    if ((e->age % 20) == 0) {
+        int m = nearest_entity(e, ET_ZOMBIE, ET_SHROOM, FX(16));
+        e->target = m >= 0 ? m + 1 : 0;
+    }
+    bool angry = e->ai == 1 && !player.dead && player.mode == MODE_SURVIVAL && !settings.peaceful;
+    if (e->ai == 1 && --e->timer <= 0)
+        e->ai = 0;
+    int32_t tx = 0, ty = 0, tz = 0;
+    bool have = false;
+    Entity *t = NULL;
+    if (e->target) {
+        t = &entities[e->target - 1];
+        if (t->type >= ET_ZOMBIE && t->type <= ET_SHROOM && t->ai != 9) {
+            tx = t->body.x; ty = t->body.y; tz = t->body.z;
+            have = true;
+        } else {
+            e->target = 0;
+            t = NULL;
+        }
+    }
+    if (!have && angry) {
+        tx = player.body.x; ty = player.body.y; tz = player.body.z;
+        have = true;
+    }
+    if (have) {
+        int32_t dx = world_wrap_delta_fx(tx - e->body.x), dz = world_wrap_delta_fx(tz - e->body.z);
+        int32_t d = dist_xz(0, 0, dx, dz);
+        turn_toward(e, yaw_toward(dx, dz), 700);
+        if (d > FX(1.9))
+            walk(e, speed);
+        if (d < FX(2.5) && iabs(ty - e->body.y) < FX(2.5) && e->attack_cd == 0) {
+            e->stage = 10;       // arms up
+            e->attack_cd = 25;
+            sound_play_at(SFX_HIT, e->body.x, e->body.y, e->body.z, 120, 70);
+            if (t) {
+                entity_damage(e->target - 1, 7 + rng_range(8), dx, dz, false);
+                t->vy = FX(0.6);
+            } else {
+                player_damage(4 + rng_range(6), DMG_MOB);
+                player.vy = FX(0.55);
+                player.vx += dx / 6;
+                player.vz += dz / 6;
+            }
+        }
+    } else {
+        // patrol around the village center
+        if (--e->timer <= 0) {
+            if (e->ai == 3) {
+                e->ai = 0;
+                e->timer = 60 + rng_range(120);
+            } else {
+                e->ai = 3;
+                e->timer = 40 + rng_range(60);
+                e->target_yaw = rng_range(ANG_FULL);
+                if (v) {
+                    int32_t cdx = world_wrap_delta_fx(((v->x << 12) + 2048) - e->body.x);
+                    int32_t cdz = world_wrap_delta_fx(((v->z << 12) + 2048) - e->body.z);
+                    if (dist_xz(0, 0, cdx, cdz) > FX(14))
+                        e->target_yaw = yaw_toward(cdx, cdz);
+                }
+            }
+        }
+        if (e->ai == 3) {
+            turn_toward(e, e->target_yaw, 250);
+            if (e->on_ground && safe_ahead(e))
+                walk(e, speed / 2);
+            else
+                e->target_yaw = (e->yaw + ANG_FULL / 2) & (ANG_FULL - 1);
+        }
+    }
+    if (have) {
+        if ((e->body.hit_x || e->body.hit_z) && e->on_ground)
+            e->vy = FX(0.42);
+    } else {
+        step_jump(e);
+        edge_guard(e);
+    }
+    mob_physics(e, false);
+    walk_anim(e);
 }
 
 static void item_tick(Entity *e, int idx)
@@ -868,6 +1397,18 @@ void entities_tick(void)
                 // Freeze very distant mobs (cheap)
                 if (far > FX(48))
                     break;
+                if (e->type == ET_VILLAGER) {
+                    if (body_in_lava(&e->body) && (e->age % 10) == 0)
+                        entity_damage(i, 4, 0, 0, false);
+                    villager_ai(e, i);
+                    break;
+                }
+                if (e->type == ET_GOLEM) {
+                    if (body_in_lava(&e->body) && (e->age % 10) == 0)
+                        entity_damage(i, 4, 0, 0, false);
+                    golem_ai(e);
+                    break;
+                }
                 if (einfo[e->type].hostile)
                     hostile_ai(e, i);
                 else
@@ -898,6 +1439,7 @@ void entities_tick(void)
     }
     if ((world.ticks % 40) == 0)
         try_spawn();
+    villages_tick();
     particles_tick();
 }
 
@@ -1059,11 +1601,22 @@ static const Model models[ET_COUNT] = {
 
 static int cur_light;
 static bool cur_hurt;
+static uint16_t cur_tint;     // RGB15 color multiplied into the lighting (0 = none)
+
+static uint16_t tint15(uint16_t c, uint16_t t)
+{
+    int r = (c & 31) * (t & 31) / 31, g = ((c >> 5) & 31) * ((t >> 5) & 31) / 31, b = ((c >> 10) & 31) * ((t >> 10) & 31) / 31;
+    return RGB15(r, g, b);
+}
 
 static void set_material(int dir)
 {
     uint16_t amb = light_ambient[dir][cur_light >> 4];
     uint16_t emi = light_emission[dir][cur_light & 15];
+    if (cur_tint) {
+        amb = tint15(amb, cur_tint);
+        emi = tint15(emi, cur_tint);
+    }
     if (cur_hurt)
         emi |= RGB15(20, 0, 0);
     GFX_DIFFUSE_AMBIENT = (uint32_t)amb << 16;
@@ -1141,6 +1694,12 @@ static bool on_screen(int32_t rx, int32_t ry, int32_t rz)
     return iabs(rx) < md && iabs(rz) < md;
 }
 
+// on screen, and in a section the camera can actually see this frame
+static bool entity_visible(const Entity *e, int32_t rx, int32_t ry, int32_t rz)
+{
+    return on_screen(rx, ry, rz) && render_point_visible(e->body.x, e->body.y + (e->body.h >> 1), e->body.z);
+}
+
 static void render_mob(Entity *e)
 {
     const Model *m = &models[e->type];
@@ -1148,7 +1707,7 @@ static void render_mob(Entity *e)
         return;
     int32_t rx, ry, rz;
     render_rel(e->body.x, e->body.y, e->body.z, &rx, &ry, &rz);
-    if (!on_screen(rx, ry + FX(1), rz))
+    if (!entity_visible(e, rx, ry + FX(1), rz))
         return;
     cur_light = light_at(e);
     cur_hurt = e->hurt > 0 || e->burn > 0 || (e->type == ET_SHROOM && e->fuse > 0 && (e->fuse & 4));
@@ -1188,11 +1747,115 @@ static void render_mob(Entity *e)
     glPopMatrix(1);
 }
 
+// Box with an optional X rotation about (py, pz) for swinging limbs
+static void swing_box(int x0, int y0, int z0, int x1, int y1, int z1, int py, int pz, int ang, int tex, int ftex)
+{
+    if (ang) {
+        glPushMatrix();
+        glTranslatef32(0, py * 512, pz * 512);
+        glRotateXi(ang);
+        glTranslatef32(0, -py * 512, -pz * 512);
+        tex_box(x0, y0, z0, x1, y1, z1, tex, ftex);
+        glPopMatrix(1);
+    } else {
+        tex_box(x0, y0, z0, x1, y1, z1, tex, ftex);
+    }
+}
+
+static uint16_t shade15(uint16_t c, int num, int den)
+{
+    return RGB15((c & 31) * num / den, ((c >> 5) & 31) * num / den, ((c >> 10) & 31) * num / den);
+}
+
+static void render_villager(Entity *e)
+{
+    int32_t rx, ry, rz;
+    render_rel(e->body.x, e->body.y, e->body.z, &rx, &ry, &rz);
+    if (!entity_visible(e, rx, ry + FX(1), rz))
+        return;
+    const VillagerRec *r = village_rec(e->vil, e->vslot);
+    const ProfInfo *pi = &prof_info[r ? r->prof % PROF_COUNT : 0];
+    cur_light = light_at(e);
+    cur_hurt = e->hurt > 0 || e->burn > 0;
+    glPushMatrix();
+    glTranslatef32(rx >> 2, ry >> 2, rz >> 2);
+    glRotateYi(-e->yaw);
+    if (e->ai == 9)
+        glRotateZi((18 - e->timer) * (ANG_FULL / 4) / 18);
+    else if (e->ai == 6)
+        glRotateZi(ANG_FULL / 4);        // asleep: lying on the bed
+    glScalef32(512, 512, 512);
+    int32_t swing = fxmul(sinLerp(e->walk_phase), e->walk_amt);
+    int leg = (swing * (ANG_FULL / 10)) >> 12;
+    // legs (dark cloth), robe, apron
+    cur_tint = shade15(pi->robe, 3, 5);
+    swing_box(-4, 0, -2, 0, 7, 2, 7, 0, leg, TEX_VILLAGER_ROBE, 0);
+    swing_box(0, 0, -2, 4, 7, 2, 7, 0, -leg, TEX_VILLAGER_ROBE, 0);
+    cur_tint = pi->robe;
+    tex_box(-4, 7, -3, 4, 24, 3, TEX_VILLAGER_ROBE, 0);
+    if (pi->apron) {
+        cur_tint = pi->accent;
+        tex_box(-4, 8, -4, 4, 22, -3, TEX_VILLAGER_ROBE, 0);
+    }
+    // folded arms and head
+    cur_tint = 0;
+    tex_box(-6, 15, -6, 6, 19, -3, TEX_VILLAGER_SKIN, 0);
+    tex_box(-4, 24, -4, 4, 34, 4, TEX_VILLAGER_SKIN, TEX_VILLAGER_FACE);
+    tex_box(-1, 25, -6, 1, 29, -4, TEX_VILLAGER_SKIN, 0);
+    cur_tint = pi->accent;
+    switch (pi->hat) {
+        case HAT_BRIM:
+            tex_box(-7, 32, -7, 7, 33, 7, TEX_VILLAGER_ROBE, 0);
+            tex_box(-4, 33, -4, 4, 36, 4, TEX_VILLAGER_ROBE, 0);
+            break;
+        case HAT_CAP:
+            tex_box(-4, 34, -4, 4, 36, 4, TEX_VILLAGER_ROBE, 0);
+            break;
+        case HAT_HOOD:
+            tex_box(-5, 26, -3, 5, 35, 5, TEX_VILLAGER_ROBE, 0);
+            break;
+        default:
+            break;
+    }
+    cur_tint = 0;
+    glPopMatrix(1);
+}
+
+static void render_golem(Entity *e)
+{
+    int32_t rx, ry, rz;
+    render_rel(e->body.x, e->body.y, e->body.z, &rx, &ry, &rz);
+    if (!entity_visible(e, rx, ry + FX(1.4), rz))
+        return;
+    cur_light = light_at(e);
+    cur_hurt = e->hurt > 0 || e->burn > 0;
+    cur_tint = 0;
+    glPushMatrix();
+    glTranslatef32(rx >> 2, ry >> 2, rz >> 2);
+    glRotateYi(-e->yaw);
+    if (e->ai == 9)
+        glRotateZi((18 - e->timer) * (ANG_FULL / 4) / 18);
+    glScalef32(512, 512, 512);
+    int32_t swing = fxmul(sinLerp(e->walk_phase), e->walk_amt);
+    int leg = (swing * (ANG_FULL / 14)) >> 12;
+    // arms swing with the walk, or come up together for a smash
+    int arm = e->stage > 0 ? -ANG_FULL / 4 + (10 - e->stage) * (ANG_FULL / 40) : leg;
+    int arm2 = e->stage > 0 ? arm : -leg;
+    swing_box(-7, 0, -3, -1, 15, 3, 15, 0, leg, TEX_GOLEM_BODY, 0);
+    swing_box(1, 0, -3, 7, 15, 3, 15, 0, -leg, TEX_GOLEM_BODY, 0);
+    tex_box(-9, 15, -6, 9, 33, 6, TEX_GOLEM_BODY, 0);
+    swing_box(-13, 4, -3, -9, 33, 3, 31, 0, arm, TEX_GOLEM_BODY, 0);
+    swing_box(9, 4, -3, 13, 33, 3, 31, 0, arm2, TEX_GOLEM_BODY, 0);
+    tex_box(-4, 33, -6, 4, 43, 2, TEX_GOLEM_BODY, TEX_GOLEM_FACE);
+    tex_box(-1, 35, -8, 1, 39, -6, TEX_GOLEM_BODY, 0);
+    glPopMatrix(1);
+}
+
 static void render_item(Entity *e)
 {
     int32_t rx, ry, rz;
     render_rel(e->body.x, e->body.y, e->body.z, &rx, &ry, &rz);
-    if (!on_screen(rx, ry, rz))
+    if (!entity_visible(e, rx, ry, rz))
         return;
     cur_light = light_at(e);
     cur_hurt = false;
@@ -1234,7 +1897,7 @@ static void render_arrow(Entity *e)
 {
     int32_t rx, ry, rz;
     render_rel(e->body.x, e->body.y, e->body.z, &rx, &ry, &rz);
-    if (!on_screen(rx, ry, rz))
+    if (!entity_visible(e, rx, ry, rz))
         return;
     cur_light = light_at(e);
     cur_hurt = false;
@@ -1252,7 +1915,7 @@ static void render_tnt(Entity *e)
 {
     int32_t rx, ry, rz;
     render_rel(e->body.x, e->body.y, e->body.z, &rx, &ry, &rz);
-    if (!on_screen(rx, ry, rz))
+    if (!entity_visible(e, rx, ry, rz))
         return;
     cur_light = light_at(e);
     cur_hurt = false;
@@ -1365,7 +2028,7 @@ static void render_xp(Entity *e)
 {
     int32_t rx, ry, rz;
     render_rel(e->body.x, e->body.y, e->body.z, &rx, &ry, &rz);
-    if (!on_screen(rx, ry, rz))
+    if (!entity_visible(e, rx, ry, rz))
         return;
     int32_t bob = sinLerp(e->age * 500) >> 5;
     int sz = e->health >= 17 ? 4 : e->health >= 7 ? 3 : e->health >= 3 ? 2 : 1;
@@ -1406,6 +2069,8 @@ void entities_render(void)
             case ET_ARROW: render_arrow(e); break;
             case ET_TNT: render_tnt(e); break;
             case ET_XP: render_xp(e); break;
+            case ET_VILLAGER: render_villager(e); break;
+            case ET_GOLEM: render_golem(e); break;
             default: render_mob(e); break;
         }
     }

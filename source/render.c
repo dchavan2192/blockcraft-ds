@@ -163,9 +163,23 @@ static bool budget_hit;
 static int32_t dropped_dist_fx;
 bool cam_underwater_fog;
 
+// The polygon cost of a section is only an estimate. The real polygon and
+// vertex RAM use is measured every frame and nudges the budget: down fast when
+// the hardware ran out (terrain would vanish), up slowly while there is room.
+static int budget_adj;
+static bool prev_budget_hit;
+
+// How far underground the camera is: 0 = open sky .. 256 = deep in a cave
+// (smoothed). Underground the fog turns dark, the sky objects are hidden and
+// the view distance shrinks, which also saves polygons and mesh memory.
+static int cave_amt;
+#define CAVE_VIEW_FX FX(34)
+static int32_t view_limit_fx;     // traversal limit (fx blocks)
+
 // Faces of the camera's section reachable from the camera cell through open cells
 static uint8_t cam_visited[512];  // bitset of 4096 cells
 static uint16_t cam_stack[4096];
+static uint16_t cam_opaque[256];  // per column (z * 16 + x): bit y set = opaque
 
 static uint8_t camera_exit_mask(int camx, int camy, int camz)
 {
@@ -175,6 +189,17 @@ static uint8_t camera_exit_mask(int camx, int camy, int camz)
         return 0x3F;
     if (block_opaque(world_get(camx, camy, camz)))
         return 0x3F;
+    // Read the section once into column bitmasks (columns are contiguous in
+    // memory), so the flood fill below never touches the world array.
+    for (int z = 0; z < 16; z++)
+        for (int x = 0; x < 16; x++) {
+            const uint8_t *col = &world.blk[widx(bx + x, by, bz + z)];
+            uint16_t m = 0;
+            for (int y = 0; y < 16; y++)
+                if (block_opaque(col[y]))
+                    m |= 1 << y;
+            cam_opaque[z * 16 + x] = m;
+        }
     memset(cam_visited, 0, sizeof(cam_visited));
     int sp = 0;
     int start = (sy << 8) | (sz << 4) | sx;
@@ -200,7 +225,7 @@ static uint8_t camera_exit_mask(int camx, int camy, int camz)
             if (cam_visited[n >> 3] & (1 << (n & 7)))
                 continue;
             cam_visited[n >> 3] |= 1 << (n & 7);
-            if (!block_opaque(world_get(bx + nx, by + ny, bz + nz)))
+            if (!(cam_opaque[nz * 16 + nx] & (1 << ny)))
                 cam_stack[sp++] = n;
         }
     }
@@ -239,6 +264,9 @@ ITCM_CODE ARM_CODE static void traverse(void)
     bfs_queue[tail++] = (BfsNode){ 0, 0, csy, -1, 0, 0 };
     section_at(ccx, csy, ccz)->last_seen = render_frame_no;
     int32_t r_sphere = 14 << 12;
+    // sections whose nearest point is past the view limit are skipped entirely
+    int32_t lim16 = ((view_limit_fx >> 8) + 14 * 16);
+    int32_t lim_d2 = lim16 * lim16;
     while (head < tail) {
         stat_bfs = tail;
         BfsNode n = bfs_queue[head++];
@@ -248,6 +276,11 @@ ITCM_CODE ARM_CODE static void traverse(void)
         int32_t rx = ((n.dcx * 16 + ccx * 16) << FX_SHIFT) - (cam.x & ((world.size << FX_SHIFT) - 1));
         int32_t rz = ((n.dcz * 16 + ccz * 16) << FX_SHIFT) - (cam.z & ((world.size << FX_SHIFT) - 1));
         int32_t ry = ((n.sy * 16) << FX_SHIFT) - cam.y;
+        if (head > 1) {
+            int32_t cxr = (rx + (8 << 12)) >> 8, cyr = (ry + (8 << 12)) >> 8, czr = (rz + (8 << 12)) >> 8;
+            if (cxr * cxr + cyr * cyr + czr * czr > lim_d2)
+                continue;
+        }
         bool visible = sphere_visible(rx + (8 << 12), ry + (8 << 12), rz + (8 << 12), r_sphere);
         if (!s->built || s->dirty) {
             if (npending < MAX_VIS) {
@@ -343,7 +376,7 @@ static void apply_budget(void)
             cost = cost * 2 / 5;
         else if (rd < (22 * 16) * (22 * 16))
             cost = cost * 3 / 4;
-        if (poly_budget_used + cost > POLY_BUDGET && kept > 2) {
+        if (poly_budget_used + cost > POLY_BUDGET + budget_adj && kept > 2) {
             if (!budget_hit) {
                 budget_cut_d2 = v->dist;
                 int32_t d = v->dist;
@@ -581,6 +614,13 @@ static void draw_sky_objects(void)
     glLoadIdentity();
     glRotateXi(cam.pitch);
     glRotateYi(cam.yaw);
+    // One view unit is one block and vertices only reach +-8 units, so the quad
+    // is built 4 units out and scaled to sit just inside the fog end. (Drawn
+    // unscaled it was only a few blocks away and showed in front of any wall
+    // or cave ceiling farther than that.)
+    int R = render_distance;
+    int32_t scale = ((R * 16 - 6) << 12) / 4;
+    int16_t s = (int16_t)((2 * R + 3) * 1024 / R);   // keeps the old angular size
     for (int i = 0; i < 2; i++) {
         int32_t a = -ang + (i ? ANG_FULL / 2 : 0) + ANG_FULL / 4;
         // Below the horizon it would show through gaps where distant terrain isn't drawn
@@ -588,17 +628,16 @@ static void draw_sky_objects(void)
             continue;
         glPushMatrix();
         glRotateZi(a);
-        // place at distance along +X axis (east at sunrise)
-        int32_t dist = (render_distance * 16) << 10; // quarter scale
+        glScalef32(scale, scale, scale);
+        // placed along +X (east at sunrise)
         GFX_TEX_FORMAT = gx_texparam16(i ? TEX_MOON : TEX_SUN, TEXGEN_NONE);
         GFX_PAL_FORMAT = 0;
         glColor3b(255, 255, 255);
-        int32_t s = (render_distance * 16 / 8 + 3) << 10;
         glBegin(GL_QUADS);
-        glTexCoord2t16(0, 0); glVertex3v16(dist >> 2, s >> 2, -s >> 2);
-        glTexCoord2t16(0, 256); glVertex3v16(dist >> 2, -s >> 2, -s >> 2);
-        glTexCoord2t16(256, 256); glVertex3v16(dist >> 2, -s >> 2, s >> 2);
-        glTexCoord2t16(256, 0); glVertex3v16(dist >> 2, s >> 2, s >> 2);
+        glTexCoord2t16(0, 0); glVertex3v16(4 << 12, s, -s);
+        glTexCoord2t16(0, 256); glVertex3v16(4 << 12, -s, -s);
+        glTexCoord2t16(256, 256); glVertex3v16(4 << 12, -s, s);
+        glTexCoord2t16(256, 0); glVertex3v16(4 << 12, s, s);
         glEnd();
         glPopMatrix(1);
     }
@@ -619,7 +658,9 @@ static void draw_clouds(void)
     glLoadIdentity();
     glRotateXi(cam.pitch);
     glRotateYi(cam.yaw);
-    glScalef32(4 << 12, 4 << 12, 4 << 12);
+    // vertices in units of 16 blocks: the cloud layer is far wider than the
+    // +-8 units a vertex can hold at the terrain's quarter scale
+    glScalef32(16 << 12, 16 << 12, 16 << 12);
     uint32_t addr = TEX_CLOUD_ADDR;
     GFX_TEX_FORMAT = (addr >> 3) | (1 << 16) | (1 << 17) | (3 << 20) | (3 << 23) | (4 << 26) | (1u << 29);
     GFX_PAL_FORMAT = 0;
@@ -629,10 +670,10 @@ static void draw_clouds(void)
     int32_t s0 = (offx - ext) >> 10, s1 = (offx + ext) >> 10;   // 1 texel per 4 blocks... (texels*16)/... keep scale
     int32_t t0 = (offz - ext) >> 10, t1 = (offz + ext) >> 10;
     glBegin(GL_QUADS);
-    glTexCoord2t16(s0 & 0xFFFF, t0 & 0xFFFF); glVertex3v16(-ext >> 2, h >> 2, -ext >> 2);
-    glTexCoord2t16(s0 & 0xFFFF, t1 & 0xFFFF); glVertex3v16(-ext >> 2, h >> 2, ext >> 2);
-    glTexCoord2t16(s1 & 0xFFFF, t1 & 0xFFFF); glVertex3v16(ext >> 2, h >> 2, ext >> 2);
-    glTexCoord2t16(s1 & 0xFFFF, t0 & 0xFFFF); glVertex3v16(ext >> 2, h >> 2, -ext >> 2);
+    glTexCoord2t16(s0 & 0xFFFF, t0 & 0xFFFF); glVertex3v16(-ext >> 4, h >> 4, -ext >> 4);
+    glTexCoord2t16(s0 & 0xFFFF, t1 & 0xFFFF); glVertex3v16(-ext >> 4, h >> 4, ext >> 4);
+    glTexCoord2t16(s1 & 0xFFFF, t1 & 0xFFFF); glVertex3v16(ext >> 4, h >> 4, ext >> 4);
+    glTexCoord2t16(s1 & 0xFFFF, t0 & 0xFFFF); glVertex3v16(ext >> 4, h >> 4, -ext >> 4);
     glEnd();
 }
 
@@ -681,6 +722,32 @@ static void draw_target(void)
 
 static int32_t fog_end_cur = 0;   // blocks (fx)
 
+static void update_cave_amount(void)
+{
+    int camx = cam.x >> FX_SHIFT, camy = cam.y >> FX_SHIFT, camz = cam.z >> FX_SHIFT;
+    int target = 0;
+    if (camy < WORLD_H) {
+        // Little sky light reaches the eye, and there is plenty of rock overhead.
+        // The depth test keeps houses and overhangs from counting as caves.
+        int sky = world_skylight(camx, camy, camz);
+        int depth = world_height(camx, camz) - camy;
+        int dark = sky >= 10 ? 0 : sky <= 2 ? 256 : (10 - sky) * 32;
+        int deep = depth <= 4 ? 0 : depth >= 12 ? 256 : (depth - 4) * 32;
+        target = dark * deep >> 8;
+    }
+    int d = target - cave_amt;
+    cave_amt += d > 0 ? (d + 7) / 8 : (d - 7) / 8;
+}
+
+static uint16_t mix_rgb15(uint16_t a, uint16_t b, int t)
+{
+    // t = 0..256 toward b
+    int r = (a & 31) + (((b & 31) - (a & 31)) * t >> 8);
+    int g = ((a >> 5) & 31) + ((((b >> 5) & 31) - ((a >> 5) & 31)) * t >> 8);
+    int bl = ((a >> 10) & 31) + ((((b >> 10) & 31) - ((a >> 10) & 31)) * t >> 8);
+    return RGB15(r, g, bl);
+}
+
 void render_frame(void)
 {
     sin_yaw = sinLerp(cam.yaw);
@@ -695,12 +762,26 @@ void render_frame(void)
 
     glLight(0, RGB15(light_r, light_g, light_b), 0, floattov10(-0.99), 0);
 
+    // Polygon budget feedback from what the hardware actually stored last frame
+    if (stat_polys >= 2040 || stat_verts >= 6100)
+        budget_adj = imax(budget_adj - 96, -700);
+    else if (prev_budget_hit && stat_polys < 1850 && stat_verts < 5500)
+        budget_adj = imin(budget_adj + 12, 300);
+
+    // View distance: the full render distance outdoors, shorter deep in caves
+    update_cave_amount();
+    int32_t full = (render_distance * 16 - 2) << 12;
+    view_limit_fx = full;
+    if (full > CAVE_VIEW_FX)
+        view_limit_fx = full - (int32_t)((int64_t)(full - CAVE_VIEW_FX) * cave_amt >> 8);
+
     traverse();
     apply_budget();
+    prev_budget_hit = budget_hit;
     PROF_MARK(7);
 
     // Fog: end where drawn terrain ends (smoothly)
-    int32_t target = (render_distance * 16 - 2) << 12;
+    int32_t target = view_limit_fx;
     if (budget_hit && dropped_dist_fx > 0 && dropped_dist_fx < target)
         target = imax(FX(18), dropped_dist_fx - FX(2));
     if (fog_end_cur == 0)
@@ -710,8 +791,16 @@ void render_frame(void)
     if (cam_underwater_fog) {
         setup_fog_end(FX(14));
     }
-    glClearColor((sky_color & 31), (sky_color >> 5) & 31, (sky_color >> 10) & 31, 31);
-    glFogColor(fog_color & 31, (fog_color >> 5) & 31, (fog_color >> 10) & 31, 31);
+    // Underground the fog and background fade to near black instead of sky blue,
+    // so gaps and the far end of a tunnel look like darkness, not daylight
+    uint16_t clear_c = sky_color, fog_c = fog_color;
+    if (cave_amt > 0) {
+        const uint16_t cave_c = RGB15(1, 1, 2);
+        clear_c = mix_rgb15(clear_c, cave_c, cave_amt);
+        fog_c = mix_rgb15(fog_c, cave_c, cave_amt);
+    }
+    glClearColor((clear_c & 31), (clear_c >> 5) & 31, (clear_c >> 10) & 31, 31);
+    glFogColor(fog_c & 31, (fog_c >> 5) & 31, (fog_c >> 10) & 31, 31);
     glFogShift(fog_shift_v);
     glFogOffset(fog_offset_v);
     for (int i = 0; i < 32; i++)
@@ -719,8 +808,10 @@ void render_frame(void)
     glFogDensity(31, 127);
 
     // Things that must never be dropped by the polygon limit come first
-    draw_sky_objects();
-    draw_clouds();
+    if (cave_amt < 128) {
+        draw_sky_objects();
+        draw_clouds();
+    }
     player_render_hand();
     entities_render();
     extern uint16_t prof_ent;
@@ -773,6 +864,10 @@ void render_frame(void)
         }
     }
 
+    // let the geometry engine finish the queued lists so the counts are final
+    // (it only holds a short FIFO, so this is a brief wait)
+    for (int spin = 0; spin < 20000 && (GFX_STATUS & BIT(27)); spin++)
+        ;
     stat_polys = GFX_POLYGON_RAM_USAGE;
     stat_verts = GFX_VERTEX_RAM_USAGE;
     glFlush(0);
@@ -788,3 +883,14 @@ void render_end_entities(void)
 }
 
 int render_debug_mask(void) { return cached_exit_mask; }
+
+bool render_point_visible(int32_t x, int32_t y, int32_t z)
+{
+    // A point is worth drawing only if this frame's visibility flood fill
+    // reached its section: mobs in other caves or behind hills are skipped
+    if (!sections)
+        return true;
+    int sy = iclamp(y >> 16, 0, SEC_Y - 1);
+    const Section *s = section_at((x >> 16) & (world.chunks - 1), sy, (z >> 16) & (world.chunks - 1));
+    return s->last_seen == render_frame_no;
+}

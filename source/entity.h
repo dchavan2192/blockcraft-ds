@@ -7,6 +7,7 @@
 enum {
     ET_NONE = 0, ET_ITEM, ET_PIG, ET_COW, ET_SHEEP, ET_CHICKEN,
     ET_ZOMBIE, ET_SKELETON, ET_SPIDER, ET_SHROOM, ET_ARROW, ET_TNT, ET_XP,
+    ET_VILLAGER, ET_GOLEM,
     ET_COUNT
 };
 
@@ -36,6 +37,14 @@ typedef struct {
     int8_t ai;            // AI state
     int8_t sheared;
     ItemStack item;
+    // villagers and golems
+    uint8_t vil, vslot;   // village and record slot
+    int8_t stage;         // path step home / golem arm swing
+    int8_t door_y;        // door this villager opened (0 = none)
+    int16_t door_x, door_z;
+    int16_t stuck;        // ticks without getting closer to the goal
+    int16_t target;       // entity being chased + 1 (0 = none)
+    int32_t best_d;       // closest distance to the goal so far
 } Entity;
 
 #define EF_FROM_PLAYER 1
@@ -57,6 +66,8 @@ void explosion(int32_t x, int32_t y, int32_t z, int radius);
 void entities_spawn_initial(void);
 void entity_shoot_arrow(int32_t x, int32_t y, int32_t z, int32_t dx, int32_t dy, int32_t dz, int32_t speed, bool from_player);
 int entities_count(int type);
+// Golems in a village turn on a player who hurts its villagers
+void village_anger_golems(int vil);
 const char *entity_name(int type);
 
 // Particles

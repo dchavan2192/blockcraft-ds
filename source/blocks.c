@@ -233,4 +233,9 @@ void blocks_init(void)
         b->tex[FACE_N] = b->tex[FACE_S] = b->tex[FACE_E] = b->tex[FACE_W] = TEX_BED_SIDE;
         b->hardness = 2; b->sound = SND_CLOTH; b->base = B_BED; b->drop = (i & 4) ? 0 : I_BED;
     }
+    b = cube(B_EMERALD_ORE, "Emerald Ore", TEX_EMERALD_ORE, 30, TOOL_PICKAXE, 3, SND_STONE); b->drop = I_EMERALD;
+    cube(B_EMERALD_BLOCK, "Block of Emerald", TEX_EMERALD_BLOCK, 50, TOOL_PICKAXE, 3, SND_STONE);
+    // village roads: packed dirt
+    b = cube(B_PATH, "Dirt Path", TEX_DIRT, 6, TOOL_SHOVEL, 0, SND_GRASS);
+    tex_tsb(b, TEX_PATH_TOP, TEX_DIRT, TEX_DIRT); b->drop = B_DIRT;
 }

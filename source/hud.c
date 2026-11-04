@@ -8,6 +8,8 @@
 #include "render.h"
 #include "ui.h"
 #include "mesh.h"
+#include "entity.h"
+#include "village.h"
 
 static char msg[2][64];
 static int msg_timer[2];
@@ -92,6 +94,19 @@ void hud_update(int vblanks, bool show_debug)
         }
     } else if (player.flying) {
         hud_print(1, 22, "Flying", HP_GRAY);
+    }
+    // who you are looking at
+    if (s == UI_HUD && player.target_entity >= 0) {
+        Entity *e = &entities[player.target_entity];
+        if (e->type == ET_VILLAGER && e->ai != 9) {
+            VillagerRec *r = village_rec(e->vil, e->vslot);
+            if (r) {
+                hud_center(14, villager_name(r), HP_WHITE);
+                hud_center(15, e->ai == 6 ? "Sleeping" : "Tap to trade", HP_GRAY);
+            }
+        } else if (e->type == ET_GOLEM && e->ai != 9) {
+            hud_center(14, "Iron Golem", HP_WHITE);
+        }
     }
     // item name after switching
     ItemStack *h = player_held();

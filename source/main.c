@@ -272,9 +272,9 @@ bool create_world(int slot)
     world.time = 1000;
     world.ticks = 0;
     snprintf(world.name, sizeof(world.name), "World %d", slot + 1);
+    tile_entities_clear();      // before generation: villages fill their chests
     worldgen_generate(world.seed, gen_progress);
     world_init_light(light_progress);
-    tile_entities_clear();
     entities_clear();
     player_reset(world.mode);
     player_spawn();

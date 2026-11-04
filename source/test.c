@@ -18,6 +18,7 @@
 #include "gfx.h"
 #include "ui.h"
 #include "save.h"
+#include "village.h"
 
 extern bool test_input_override;
 int game_frame(int vblanks, uint32_t *tick_accum_p);
@@ -524,7 +525,7 @@ void test_run(void)
     mn[1] = entity_spawn(ET_SKELETON, ((px + 4) << 12), py << 12, ((pz - 1) << 12));
     mn[2] = entity_spawn(ET_SPIDER, ((px - 5) << 12), py << 12, ((pz) << 12));
     mn[3] = entity_spawn(ET_SHROOM, ((px + 6) << 12), py << 12, ((pz - 4) << 12));
-    frames(150);
+    frames(210);    // ~70 ticks: monsters wait a moment before giving chase
     check(player.health < 20, "monsters hurt player: hp %d%s", player.health, player.dead ? " DEAD" : "");
     if (player.dead) {
         player_respawn();
@@ -604,6 +605,32 @@ void test_run(void)
     check(entities_count(ET_XP) == 0 && xp_total == 5, "zombie xp collected: L%d +%d", player.xp_level, player.xp_points);
     player_add_xp(20);
     check(player.xp_level == 2 && player.xp_points == 9, "leveling: L%d +%d (L2 +9)", player.xp_level, player.xp_points);
+
+    // ---- T16: villages and trading ----
+    {
+        Village *v = NULL;
+        for (int i = 0; i < MAX_VILLAGES && !v; i++)
+            if (villages[i].used)
+                v = &villages[i];
+        check(v && v->nvillagers >= 2, "village generated (%d villagers)", v ? v->nvillagers : 0);
+        if (v) {
+            VillagerRec *r = &v->v[0];
+            check(is_bed(world_get(r->bed_x, r->bed_y, r->bed_z)) && is_door(world_get(r->door_x, r->door_y, r->door_z)),
+                  "%s has a bed and door", villager_name(r));
+            const Trade *t = villager_trade_def(r, 0);
+            for (int k = 0; k < 4; k++)
+                player_give(t->buy, t->buy_n, 0);
+            if (t->buy2)
+                player_give(t->buy2, t->buy2_n * 4, 0);
+            int had = inv_count_item(player.inv, INV_SIZE, t->sell);
+            int lv = player.xp_level, pts = player.xp_points;
+            int done = villager_do_trade(r, 0, 2);
+            player.xp_level = lv;      // trading pays experience; keep the later checks exact
+            player.xp_points = pts;
+            check(done == 2 && inv_count_item(player.inv, INV_SIZE, t->sell) >= had + t->sell_n * 2 - (t->sell == t->buy ? t->buy_n * 2 : 0) &&
+                  r->uses[0] == 2, "trade with villager x%d", done);
+        }
+    }
 
     // ---- T15: save round trip ----
     uint32_t sum = 0;

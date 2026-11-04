@@ -20,12 +20,15 @@ enum {
     UI_LOADING,
     UI_CONFIRM_DELETE,
     UI_SLEEP,
+    UI_TRADE,
 };
 
 void ui_init(void);
 void ui_open(int screen);
 void ui_open_chest(int x, int y, int z);
 void ui_open_furnace(int x, int y, int z);
+void ui_open_trade(int entity_index);    // trading with a villager
+int ui_trade_entity(void);               // villager being traded with (-1 = none)
 void ui_close(void);          // return to the game HUD
 int ui_screen(void);
 bool ui_in_game_menu(void);   // inventory-type screens over the running game

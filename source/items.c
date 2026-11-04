@@ -99,6 +99,9 @@ void items_init(void)
     blockitem(B_JACKOLANTERN, ICON_BLK_JACKOLANTERN);
     blockitem(B_WATER, ICON_BLK_WATER);
     blockitem(B_LAVA, ICON_BLK_LAVA);
+    d = blockitem(B_EMERALD_ORE, ICON_BLK_EMERALD_ORE); d->smelt = I_EMERALD;
+    blockitem(B_EMERALD_BLOCK, ICON_BLK_EMERALD_BLOCK);
+    blockitem(B_PATH, ICON_BLK_PATH);
     items[B_SNOWY_GRASS] = items[B_GRASS];
 
     // Plain items
@@ -145,6 +148,7 @@ void items_init(void)
     food(I_PUMPKIN_PIE, "Pumpkin Pie", ICON_PUMPKIN_PIE, 8, 48);
     d = it(I_DOOR, "Door", ICON_BLK_DOOR, 1, IK_PLACER); d->places = B_DOOR; d->fuel = 200;
     d = it(I_BED, "Bed", ICON_BLK_BED, 1, IK_PLACER); d->places = B_BED;
+    it(I_EMERALD, "Emerald", ICON_EMERALD, 64, IK_MISC);
 
     // Tools
     static const char *mat_names[5] = { "Wooden", "Stone", "Iron", "Golden", "Diamond" };

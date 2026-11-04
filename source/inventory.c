@@ -239,6 +239,8 @@ void recipes_init(void)
     shapeless(I_IRON_INGOT, 9, B_IRON_BLOCK, 0);
     shapeless(I_DIAMOND, 9, B_DIAMOND_BLOCK, 0);
     shapeless(I_COAL, 9, B_COAL_BLOCK, 0);
+    shaped(B_EMERALD_BLOCK, 1, "MMM|MMM|MMM", 'M', I_EMERALD, 0);
+    shapeless(I_EMERALD, 9, B_EMERALD_BLOCK, 0);
     shapeless(I_BONEMEAL, 3, I_BONE, 0);
     shaped(B_BOOKSHELF, 1, "PPP|LLL|PPP", 'P', G_PLANKS, 'L', I_LEATHER, 0);
     shapeless(B_MOSSY_COBBLESTONE, 1, B_COBBLESTONE, B_LEAVES_OAK, 0);

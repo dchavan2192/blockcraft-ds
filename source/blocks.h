@@ -89,6 +89,7 @@ enum {
     B_JACKOLANTERN, B_JACKOLANTERN_LAST = B_JACKOLANTERN + 3,
     B_DOOR, B_DOOR_LAST = B_DOOR + 15,     // +facing(0..3) +open*4 +top*8
     B_BED, B_BED_LAST = B_BED + 7,         // +facing(0..3) +head*4
+    B_EMERALD_ORE, B_EMERALD_BLOCK, B_PATH,
     B_COUNT
 };
 

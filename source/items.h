@@ -20,7 +20,8 @@ enum {
     I_ARMOR_START = I_TOOLS_END,
     // 4 materials (leather, iron, gold, diamond) x 4 slots (helmet, chest, legs, boots)
     I_ARMOR_END = I_ARMOR_START + 16,
-    I_COUNT = I_ARMOR_END
+    I_EMERALD = I_ARMOR_END,    // later additions go here so saved item ids stay valid
+    I_COUNT
 };
 
 enum { MAT_WOOD = 0, MAT_STONE, MAT_IRON, MAT_GOLD, MAT_DIAMOND };

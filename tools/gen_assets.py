@@ -809,6 +809,66 @@ def tex_skin(base, seed, var=6, spots=None):
 def eye_pair(xl, xr, y, white, pupil):
     return [(xl, y, white), (xl + 1, y, pupil), (xr, y, pupil), (xr + 1, y, white)]
 
+def tex_path_top(seed=40):
+    rng = R(seed)
+    base = (150, 122, 74)
+    t = Tex(); noise_fill(t, base, 9, rng)
+    specks(t, [shade(base, 0.82), shade(base, 1.15), (128, 112, 86)], 34, rng)
+    return t
+
+def tex_villager_face():
+    rng = R(530)
+    SKIN = (186, 136, 100)
+    t = Tex(); noise_fill(t, SKIN, 5, rng)
+    for x in range(2, 14):                       # heavy brow
+        t.set(x, 5, (70, 48, 34))
+    for (x, c) in [(3, (240, 240, 236)), (4, (40, 110, 60)), (11, (40, 110, 60)), (12, (240, 240, 236))]:
+        t.set(x, 7, c)
+    for y in range(6, 12):                       # nose ridge shading
+        t.set(7, y, shade(SKIN, 0.86)); t.set(8, y, shade(SKIN, 0.92))
+    for x in range(5, 11):                       # mouth
+        t.set(x, 13, (96, 60, 46))
+    return t
+
+def tex_villager_robe(seed=531):
+    # light neutral cloth: tinted per profession by the renderer
+    rng = R(seed)
+    base = (214, 208, 198)
+    t = Tex()
+    for y in range(16):
+        for x in range(16):
+            v = math.sin(x * 0.9 + y * 0.35) * 0.5 + math.sin(y * 1.3 - x * 0.2) * 0.5
+            t.set(x, y, shade(base, 0.9 + v * 0.05 + rng.uniform(-0.03, 0.03)))
+    for y in range(16):                          # seam and belt
+        t.set(7, y, shade(base, 0.8))
+    for x in range(16):
+        t.set(x, 10, shade(base, 0.72))
+    return t
+
+def tex_golem(kind):
+    rng = R(540 + (kind == "face"))
+    IRON = (196, 190, 180)
+    t = Tex(); noise_fill(t, IRON, 8, rng)
+    for _ in range(5):                           # cracks
+        x, y = rng.randrange(16), rng.randrange(16)
+        for i in range(rng.randint(2, 4)):
+            t.set(x + i, y + (i & 1), shade(IRON, 0.72))
+    if kind == "face":
+        for x in range(3, 13):
+            t.set(x, 4, shade(IRON, 0.7))
+        for (x, y) in [(4, 6), (5, 6), (10, 6), (11, 6)]:
+            t.set(x, y, (150, 40, 30))
+        for y in range(7, 12):
+            t.set(7, y, shade(IRON, 0.85)); t.set(8, y, shade(IRON, 0.9))
+        for x in range(5, 11):
+            t.set(x, 13, shade(IRON, 0.6))
+    else:
+        for _ in range(10):                      # vines
+            x, y = rng.randrange(16), rng.randrange(8)
+            for i in range(rng.randint(2, 6)):
+                t.set(x + rng.randint(-1, 1), y + i, (70, 130, 50))
+    return t
+
 def build_block_textures():
     reg("grass_top", tex_grass_top())
     reg("grass_side", tex_grass_side())
@@ -935,6 +995,15 @@ def build_block_textures():
     reg("player_skin", tex_skin((200, 150, 110), 520, 5))
     reg("player_sleeve", tex_skin((40, 120, 170), 521, 6))
     reg("white", Tex(fill=(255, 255, 255)))
+    # villages
+    reg("emerald_ore", tex_ore(29, (40, 200, 90), (150, 255, 170)))
+    reg("emerald_block", tex_metal_block((52, 196, 96), 304))
+    reg("path_top", tex_path_top())
+    reg("villager_face", tex_villager_face())
+    reg("villager_skin", tex_skin((186, 136, 100), 532, 5))
+    reg("villager_robe", tex_villager_robe())
+    reg("golem_face", tex_golem("face"))
+    reg("golem_body", tex_golem("body"))
 
 # Animated frames are stored after the main table.
 ANIM_FRAMES = 8
@@ -1556,6 +1625,7 @@ def build_icons():
     reg_icon("paper", icon_from_mask(M_INGOT, mat_colors((240, 240, 234), (200, 200, 194))))
     reg_icon("sugar", icon_from_mask(M_POWDER, mat_colors((250, 250, 250), (200, 200, 210))))
     reg_icon("pumpkin_pie", icon_from_mask(M_BREAD, mat_colors((220, 140, 40), (150, 90, 30))))
+    reg_icon("emerald", icon_from_mask(M_GEM, mat_colors((70, 230, 120), (20, 140, 60))))
 
 # Block item icons: computed after textures; names "blk_<texname>" are made on demand
 BLOCK_ICON_SPECS = []   # (name, kind, top, side, front)
@@ -1756,6 +1826,10 @@ def build_sounds():
     snd("chicken", concat(tone(0.07, 900, 1200, "sq", 0.4, 2), silence(0.03), tone(0.06, 1000, 1300, "sq", 0.4, 2)))
     snd("door", mixs(noise_burst(0.15, 0.2, 32, 0.6, 2), tone(0.15, 220, 180, "tri", 0.4, 2)))
     snd("fire", noise_burst(0.3, 0.6, 33, 0.3, 1.0))
+    # villagers: a nasal "hmm", a pleased "hm-hm" and a grumpy "hmph"
+    snd("villager", mixs(tone(0.45, 190, 150, "saw", 0.5, 1.3, vib=0.05), tone(0.45, 380, 300, "tri", 0.25, 1.3, vib=0.05)))
+    snd("villager_yes", concat(tone(0.12, 200, 240, "saw", 0.5, 1.6), silence(0.04), tone(0.16, 240, 300, "saw", 0.5, 1.6)))
+    snd("villager_no", mixs(tone(0.3, 220, 140, "saw", 0.55, 1.4), tone(0.3, 110, 70, "tri", 0.3, 1.4)))
     # piano-ish note for ambient music (C5 ~ 523Hz)
     n = int(1.6 * SR)
     piano = []
@@ -1921,6 +1995,8 @@ def define_block_icons():
     B("blk_door", "door_bottom", flat=True)
     B("blk_water", "water"); B("blk_lava", "lava")
     B("blk_farmland", "farmland_dry", "dirt")
+    B("blk_emerald_ore", "emerald_ore"); B("blk_emerald_block", "emerald_block")
+    B("blk_path", "path_top", "dirt")
 
 if __name__ == "__main__":
     main()

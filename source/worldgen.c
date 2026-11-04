@@ -3,6 +3,7 @@
 #include "worldgen.h"
 #include "world.h"
 #include "noise.h"
+#include "village.h"
 
 uint8_t *biome_map;
 
@@ -411,14 +412,29 @@ ARM_CODE void worldgen_generate(uint32_t seed, void (*progress)(const char *stag
                     place_vein(x, y, z, ores[o].id, ores[o].size);
                 }
             }
+            // Emeralds: single ores, mostly under mountains
+            int em = biome_map[(bz + 8) * ws + bx + 8] == BIOME_MOUNTAINS ? 4 : (grange(3) == 0);
+            for (int t = 0; t < em; t++) {
+                int x = bx + grange(16), z = bz + grange(16), y = 4 + grange(28);
+                if (world_get(x, y, z) == B_STONE)
+                    world_set_raw(x, y, z, B_EMERALD_ORE);
+            }
         }
         if (progress)
             progress("Placing ores", cz * 100 / chunks);
     }
 
+    // ---- Villages (before trees, which stay out of them) ----
+    if (progress)
+        progress("Building villages", 0);
+    uint8_t *vmask = calloc(ws * ws, 1);
+    villages_generate(seed, vmask);
+
     // ---- Pass 4: surface decoration ----
     for (int z = 0; z < ws; z++) {
         for (int x = 0; x < ws; x++) {
+            if (vmask && vmask[z * ws + x])
+                continue;
             int biome = biome_map[z * ws + x];
             // find surface
             int y = WORLD_H - 2;
@@ -445,7 +461,8 @@ ARM_CODE void worldgen_generate(uint32_t seed, void (*progress)(const char *stag
                     while (ty > 0 && world_get(tx, ty, tz) == B_AIR)
                         ty--;
                     int g = world_get(tx, ty, tz);
-                    if (g == B_GRASS || g == B_SNOWY_GRASS)
+                    bool in_village = vmask && vmask[((tz & world.mask) * ws) + (tx & world.mask)];
+                    if ((g == B_GRASS || g == B_SNOWY_GRASS) && !in_village)
                         tree_raw(tx, ty, tz, kind, tree_rng);
                     continue;
                 }
@@ -498,8 +515,18 @@ ARM_CODE void worldgen_generate(uint32_t seed, void (*progress)(const char *stag
             world_set_raw(x, y, z, grange(2) ? B_MUSHROOM_BROWN : B_MUSHROOM_RED);
     }
 
-    // Spawn point: search outward from center for dry land
+    free(vmask);
+
+    // Spawn point: search outward from the first village (or the center) for dry land
     int cxw = ws / 2, czw = ws / 2;
+#ifndef TESTMODE
+    for (int i = 0; i < MAX_VILLAGES; i++)
+        if (villages[i].used) {
+            cxw = villages[i].x + 20;
+            czw = villages[i].z;
+            break;
+        }
+#endif
     world.spawn_x = cxw; world.spawn_z = czw; world.spawn_y = SEA_LEVEL + 2;
     for (int r = 0; r < ws / 2; r += 2) {
         bool found = false;

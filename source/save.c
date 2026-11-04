@@ -12,9 +12,10 @@
 #include "inventory.h"
 #include "entity.h"
 #include "ui.h"
+#include "village.h"
 
 #define SAVE_MAGIC 0x53444342u   // "BCDS"
-#define SAVE_VERSION 3   // 3 adds experience; version 2 saves still load
+#define SAVE_VERSION 4   // 3 adds experience, 4 villages; version 2 and 3 saves still load
 
 static bool fat_ok;
 static char base_dir[64];
@@ -55,7 +56,7 @@ static bool read_header(FILE *f, SaveHeader *h)
 {
     if (fread(h, sizeof(*h), 1, f) != 1)
         return false;
-    return h->magic == SAVE_MAGIC && (h->version == 2 || h->version == SAVE_VERSION) && (h->size == 128 || h->size == 256);
+    return h->magic == SAVE_MAGIC && h->version >= 2 && h->version <= SAVE_VERSION && (h->size == 128 || h->size == 256);
 }
 
 void save_scan_slots(void)
@@ -149,6 +150,12 @@ static bool read_rle(FILE *f, uint8_t *data, size_t n, void (*progress)(int), in
     return true;
 }
 
+static bool saved_entity(const Entity *e)
+{
+    return e->type != ET_NONE && e->type != ET_ARROW && e->type != ET_TNT && e->type != ET_XP &&
+           e->type != ET_VILLAGER && e->type != ET_GOLEM && e->ai != 9;
+}
+
 #define W(x) ok = ok && fwrite(&(x), sizeof(x), 1, f) == 1
 #define R(x) ok = ok && fread(&(x), sizeof(x), 1, f) == 1
 
@@ -179,15 +186,18 @@ bool save_world_fp(FILE *f, void (*progress)(int pct))
     W(player.xp_level); W(player.xp_points);
     // Tile entities
     W(chests); W(furnaces);
+    // Villages (villagers and golems live in these records, not in the entity list)
+    villages_sync();
+    W(villages);
     // Entities (mobs and items only)
     uint16_t ne = 0;
     for (int i = 0; i < MAX_ENTITIES; i++)
-        if (entities[i].type != ET_NONE && entities[i].type != ET_ARROW && entities[i].type != ET_TNT && entities[i].type != ET_XP && entities[i].ai != 9)
+        if (saved_entity(&entities[i]))
             ne++;
     W(ne);
     for (int i = 0; i < MAX_ENTITIES; i++) {
         Entity *e = &entities[i];
-        if (e->type == ET_NONE || e->type == ET_ARROW || e->type == ET_TNT || e->type == ET_XP || e->ai == 9)
+        if (!saved_entity(e))
             continue;
         W(e->type); W(e->body.x); W(e->body.y); W(e->body.z); W(e->health); W(e->item); W(e->sheared); W(e->yaw);
     }
@@ -260,13 +270,17 @@ bool load_world_fp(FILE *f, void (*progress)(int pct))
         R(player.xp_level); R(player.xp_points);
     }
     R(chests); R(furnaces);
-    entities_clear();
+    if (h.version >= 4)
+        R(villages);
+    else
+        villages_clear();     // older worlds have no villages
+    entities_clear();         // also marks every villager as not loaded
     uint16_t ne = 0;
     R(ne);
     for (int i = 0; ok && i < ne; i++) {
         uint8_t type; int32_t x, y, z; int16_t health; ItemStack item; int8_t sheared; int16_t yaw;
         R(type); R(x); R(y); R(z); R(health); R(item); R(sheared); R(yaw);
-        if (!ok || type == ET_NONE || type >= ET_COUNT)
+        if (!ok || type == ET_NONE || type >= ET_COUNT || type == ET_VILLAGER || type == ET_GOLEM)
             continue;
         int e = entity_spawn(type, x, y, z);
         if (e >= 0) {
